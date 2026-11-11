@@ -1,186 +1,153 @@
 'use client';
-import LogoGoFerias from '@/components/LogoGoFerias'
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import LogoGoFerias from '@/components/LogoGoFerias';
 
-export default function TelaAcesso() {
+export default function TelaInicial() {
   const router = useRouter();
   const [modoCadastro, setModoCadastro] = useState(false);
+  const [tipoUsuario, setTipoUsuario] = useState<'guest' | 'host'>('guest');
   const [email, setEmail] = useState('');
   const [senha, setSenha] = useState('');
-  const [perfil, setPerfil] = useState<'hospede' | 'proprietario'>('proprietario');
   const [carregando, setCarregando] = useState(false);
-  const [erro, setErro] = useState('');
 
   const handleAutenticacao = async (e: React.FormEvent) => {
     e.preventDefault();
     setCarregando(true);
-    setErro('');
 
     try {
       if (modoCadastro) {
-        // 1. Cria o usuário no Auth do Supabase
-        const { data: authData, error: authError } = await supabase.auth.signUp({
+        const { data, error } = await supabase.auth.signUp({
           email,
           password: senha,
         });
+        if (error) throw error;
 
-        if (authError) throw authError;
-
-        if (authData.user) {
-          // 2. Salva o tipo de perfil (Hóspede ou Proprietário) na tabela profiles
-          const { error: profileError } = await supabase
-            .from('profiles')
-            .insert([
-              {
-                id: authData.user.id,
-                email: email,
-                role: perfil,
-              },
-            ]);
-
-          if (profileError) throw profileError;
-
-          // 3. Redireciona conforme o perfil escolhido
-          if (perfil === 'hospede') {
-            router.push('/marketplace');
-          } else {
-            router.push('/anfitriao');
-          }
+        if (data.user) {
+          await supabase.from('profiles').upsert([
+            {
+              id: data.user.id,
+              email,
+              role: tipoUsuario,
+            },
+          ]);
         }
+
+        alert('Conta criada com sucesso!');
+        router.push(tipoUsuario === 'host' ? '/anfitriao' : '/marketplace');
       } else {
-        // 1. Faz o Login do usuário existente
-        const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+        const { data, error } = await supabase.auth.signInWithPassword({
           email,
           password: senha,
         });
+        if (error) throw error;
 
-        if (authError) throw authError;
-
-        if (authData.user) {
-          // 2. Busca no banco qual é o perfil desse usuário
-          const { data: profileData, error: profileError } = await supabase
+        if (data.user) {
+          const { data: perfil } = await supabase
             .from('profiles')
             .select('role')
-            .eq('id', authData.user.id)
+            .eq('id', data.user.id)
             .single();
 
-          if (profileError) throw profileError;
-
-          // 3. Redireciona automaticamente
-          if (profileData?.role === 'hospede') {
-            router.push('/marketplace');
-          } else {
-            router.push('/anfitriao');
-          }
+          router.push(perfil?.role === 'host' ? '/anfitriao' : '/marketplace');
         }
       }
     } catch (err: any) {
-      setErro(err.message || 'Ocorreu um erro na autenticação.');
+      alert(err.message || 'Erro ao acessar sua conta.');
     } finally {
       setCarregando(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col justify-center items-center p-4">
-      <div className="max-w-md w-full bg-white rounded-2xl shadow-xl border border-gray-100 p-8">
-        <div className="text-center mb-6">
-          <h1 className="text-3xl font-extrabold text-gray-900">🏠 GoFerias</h1>
-          <p className="text-sm text-gray-500 mt-1">
-            {modoCadastro ? 'Crie sua conta gratuita' : 'Entre na sua conta para continuar'}
-          </p>
+    <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4 font-sans text-[#222222]">
+      <div className="bg-white rounded-3xl border border-gray-200 shadow-xl max-w-md w-full p-8">
+        <div className="flex justify-center mb-3">
+          <LogoGoFerias />
         </div>
 
-        {erro && (
-          <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl">
-            {erro}
+        <p className="text-center text-sm text-gray-500 mb-6">
+          {modoCadastro
+            ? 'Crie sua conta gratuita para viajar ou anunciar'
+            : 'Entre na sua conta para continuar'}
+        </p>
+
+        {modoCadastro && (
+          <div className="grid grid-cols-2 gap-2 p-1 bg-gray-100 rounded-xl mb-5">
+            <button
+              type="button"
+              onClick={() => setTipoUsuario('guest')}
+              className={`py-2 text-xs font-bold rounded-lg transition ${
+                tipoUsuario === 'guest'
+                  ? 'bg-white text-[#155E75] shadow-xs'
+                  : 'text-gray-500 hover:text-gray-800'
+              }`}
+            >
+              Sou Viajante
+            </button>
+            <button
+              type="button"
+              onClick={() => setTipoUsuario('host')}
+              className={`py-2 text-xs font-bold rounded-lg transition ${
+                tipoUsuario === 'host'
+                  ? 'bg-white text-[#E87722] shadow-xs'
+                  : 'text-gray-500 hover:text-gray-800'
+              }`}
+            >
+              Sou Anfitrião
+            </button>
           </div>
         )}
 
         <form onSubmit={handleAutenticacao} className="space-y-4">
-          {modoCadastro && (
-            <div>
-              <label className="block text-xs font-bold text-gray-700 uppercase mb-2">
-                Como você quer usar o GoFerias?
-              </label>
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  type="button"
-                  onClick={() => setPerfil('hospede')}
-                  className={`p-3 rounded-xl border-2 text-left transition ${
-                    perfil === 'hospede'
-                      ? 'border-rose-500 bg-rose-50 text-rose-900'
-                      : 'border-gray-200 text-gray-600 hover:bg-gray-50'
-                  }`}
-                >
-                  <span className="block font-bold text-sm">Sou Hóspede</span>
-                  <span className="text-[11px] opacity-80">Buscar imóveis</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setPerfil('proprietario')}
-                  className={`p-3 rounded-xl border-2 text-left transition ${
-                    perfil === 'proprietario'
-                      ? 'border-blue-600 bg-blue-50 text-blue-900'
-                      : 'border-gray-200 text-gray-600 hover:bg-gray-50'
-                  }`}
-                >
-                  <span className="block font-bold text-sm">Sou Proprietário</span>
-                  <span className="text-[11px] opacity-80">1º imóvel grátis</span>
-                </button>
-              </div>
-            </div>
-          )}
-
           <div>
-            <label className="block text-xs font-bold text-gray-700 uppercase mb-1">E-mail</label>
+            <label className="block text-xs font-semibold text-gray-700 mb-1">
+              E-mail
+            </label>
             <input
               type="email"
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="seu@email.com"
-              className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm text-gray-900"
+              placeholder="seuemail@exemplo.com"
+              className="w-full px-4 py-3 border border-gray-300 rounded-xl text-sm focus:outline-none focus:border-[#155E75] transition"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-gray-700 uppercase mb-1">Senha</label>
+            <label className="block text-xs font-semibold text-gray-700 mb-1">
+              Senha
+            </label>
             <input
               type="password"
               required
               minLength={6}
               value={senha}
               onChange={(e) => setSenha(e.target.value)}
-              placeholder="Mínimo 6 caracteres"
-              className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm text-gray-900"
+              placeholder="••••••••"
+              className="w-full px-4 py-3 border border-gray-300 rounded-xl text-sm focus:outline-none focus:border-[#155E75] transition"
             />
           </div>
 
           <button
             type="submit"
             disabled={carregando}
-            className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition disabled:bg-gray-400 text-sm"
+            className="w-full py-3.5 bg-[#E87722] hover:bg-[#d16617] text-white font-bold rounded-xl text-sm transition shadow-sm disabled:bg-gray-300"
           >
             {carregando
-              ? 'Processando...'
+              ? 'Carregando...'
               : modoCadastro
-              ? 'Criar Conta e Entrar'
+              ? 'Criar conta gratuita'
               : 'Entrar na Plataforma'}
           </button>
         </form>
 
-        <div className="mt-6 text-center border-t border-gray-100 pt-4">
+        <div className="mt-6 pt-5 border-t border-gray-100 text-center">
           <button
             type="button"
-            onClick={() => {
-              setModoCadastro(!modoCadastro);
-              setErro('');
-            }}
-            className="text-sm text-blue-600 font-medium hover:underline"
+            onClick={() => setModoCadastro(!modoCadastro)}
+            className="text-sm font-semibold text-[#155E75] hover:underline"
           >
             {modoCadastro
               ? 'Já tem uma conta? Faça login aqui'
