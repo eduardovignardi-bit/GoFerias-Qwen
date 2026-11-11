@@ -1,4 +1,5 @@
 'use client';
+import LogoGoFerias from '@/components/LogoGoFerias'
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
