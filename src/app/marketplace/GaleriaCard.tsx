@@ -1,13 +1,25 @@
 'use client';
 import { useState } from 'react';
 
-export default function GaleriaCard({ imovel }: any) {
-  const listaFotos =
+type ImovelGaleria = {
+  images?: unknown;
+  image_url?: string | null;
+  title?: string | null;
+};
+
+export default function GaleriaCard({
+  imovel,
+  mostrarControles = true,
+}: {
+  imovel: ImovelGaleria;
+  mostrarControles?: boolean;
+}) {
+  const listaFotos: string[] =
     Array.isArray(imovel.images) && imovel.images.length > 0
-      ? imovel.images
+      ? imovel.images.filter((foto): foto is string => typeof foto === 'string')
       : imovel.image_url
-      ? [imovel.image_url]
-      : [];
+        ? [imovel.image_url]
+        : [];
 
   const [indice, setIndice] = useState(0);
 
@@ -33,11 +45,11 @@ export default function GaleriaCard({ imovel }: any) {
     <div className="relative h-full w-full bg-gray-100 group overflow-hidden">
       <img
         src={listaFotos[indice]}
-        alt={imovel.title}
+        alt={imovel.title || ''}
         className="h-full w-full object-cover group-hover:scale-105 transition duration-500"
       />
 
-      {listaFotos.length > 1 && (
+      {mostrarControles && listaFotos.length > 1 && (
         <>
           <button
             type="button"
@@ -54,7 +66,7 @@ export default function GaleriaCard({ imovel }: any) {
             ›
           </button>
           <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1">
-            {listaFotos.map((_: any, i: number) => (
+            {listaFotos.map((_, i) => (
               <span
                 key={i}
                 className={`w-1.5 h-1.5 rounded-full transition ${

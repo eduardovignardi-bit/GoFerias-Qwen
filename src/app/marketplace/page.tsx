@@ -1,120 +1,252 @@
 'use client';
-import { useState, useEffect } from 'react';
+
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import GaleriaCard from './GaleriaCard';
 import LogoGoFerias from '@/components/LogoGoFerias';
 
+type Coordenadas = {
+  lat: number;
+  lon: number;
+};
+
+type Imovel = {
+  id: string;
+  title?: string | null;
+  location?: string | null;
+  street?: string | null;
+  city?: string | null;
+  state?: string | null;
+  cep?: string | null;
+  latitude?: number | string | null;
+  longitude?: number | string | null;
+  lat?: number | string | null;
+  lon?: number | string | null;
+  price_per_night?: number | string | null;
+  cleaning_fee?: number | string | null;
+  images?: unknown;
+  [key: string]: unknown;
+};
+
+const COORDENADAS_PADRAO: Coordenadas = { lat: -27.5954, lon: -48.548 };
+
+function coordenadasValidas(lat: unknown, lon: unknown): Coordenadas | null {
+  if ((typeof lat !== 'number' && typeof lat !== 'string') ||
+      (typeof lon !== 'number' && typeof lon !== 'string') ||
+      String(lat).trim() === '' ||
+      String(lon).trim() === '') {
+    return null;
+  }
+
+  const latitude = Number(lat);
+  const longitude = Number(lon);
+  if (
+    !Number.isFinite(latitude) ||
+    !Number.isFinite(longitude) ||
+    latitude < -90 ||
+    latitude > 90 ||
+    longitude < -180 ||
+    longitude > 180
+  ) {
+    return null;
+  }
+
+  return { lat: latitude, lon: longitude };
+}
+
+function obterCoordenadasImovel(imovel: Imovel): Coordenadas | null {
+  return (
+    coordenadasValidas(imovel.latitude, imovel.longitude) ||
+    coordenadasValidas(imovel.lat, imovel.lon)
+  );
+}
+
+function obterEnderecoImovel(imovel: Imovel): string {
+  if (imovel.street && imovel.city) {
+    return [imovel.street, imovel.city, imovel.state, 'Brasil'].filter(Boolean).join(', ');
+  }
+  return imovel.cep || imovel.location || '';
+}
+
 export default function Marketplace() {
   const router = useRouter();
-  const [imoveis, setImoveis] = useState<any[]>([]);
+  const [imoveis, setImoveis] = useState<Imovel[]>([]);
   const [busca, setBusca] = useState('');
-  const [coordsMapa, setCoordsMapa] = useState({ lat: -27.5954, lon: -48.548 });
+  const [termoMapa, setTermoMapa] = useState('');
+  const [coordsMapa, setCoordsMapa] = useState<Coordenadas>(COORDENADAS_PADRAO);
   const [carregando, setCarregando] = useState(true);
+  const [erroMapa, setErroMapa] = useState('');
+  const requisicaoMapa = useRef(0);
 
   useEffect(() => {
-    buscarImoveisAtivos();
-  }, []);
+    let ativo = true;
 
-  const buscarImoveisAtivos = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('properties')
-        .select('*')
-        .eq('is_active', true)
-        .order('created_at', { ascending: false });
-      if (error) throw error;
-      if (data) {
-        setImoveis(data);
-        const primeiro = data[0];
+    const buscarImoveisAtivos = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('properties')
+          .select('*')
+          .eq('is_active', true)
+          .order('created_at', { ascending: false });
+
+        if (error) throw error;
+        if (!ativo) return;
+
+        const lista = (data || []) as Imovel[];
+        setImoveis(lista);
+        const primeiro = lista[0];
         if (primeiro) {
-          const termo =
-            primeiro.street && primeiro.city
-              ? `${primeiro.street}, ${primeiro.city}, ${primeiro.state}`
-              : primeiro.cep || primeiro.location;
-          if (termo && termo !== 'Não informada') {
-            atualizarCoordenadasMapa(termo);
+          const coordenadas = obterCoordenadasImovel(primeiro);
+          if (coordenadas) {
+            setCoordsMapa(coordenadas);
+          } else {
+            setTermoMapa(obterEnderecoImovel(primeiro));
           }
         }
+      } catch (error) {
+        if (ativo) console.error('Erro ao buscar imóveis:', error);
+      } finally {
+        if (ativo) setCarregando(false);
       }
-    } catch (error) {
-      console.error('Erro ao buscar imóveis:', error);
-    } finally {
-      setCarregando(false);
+    };
+
+    void buscarImoveisAtivos();
+    return () => {
+      ativo = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!termoMapa.trim()) return;
+
+    const idRequisicao = ++requisicaoMapa.current;
+    const temporizador = window.setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/mapa?q=${encodeURIComponent(termoMapa.trim())}`);
+        if (!response.ok) {
+          throw new Error(`Falha ao localizar o endereço (HTTP ${response.status}).`);
+        }
+
+        const dados: unknown = await response.json();
+        if (!dados || typeof dados !== 'object' || !('lat' in dados) || !('lon' in dados)) {
+          throw new Error('A resposta do serviço de mapas não contém coordenadas válidas.');
+        }
+
+        const coordenadas = coordenadasValidas(dados.lat, dados.lon);
+        if (!coordenadas) {
+          throw new Error('O serviço de mapas retornou coordenadas inválidas.');
+        }
+
+        if (idRequisicao === requisicaoMapa.current) {
+          setCoordsMapa(coordenadas);
+          setErroMapa('');
+        }
+      } catch (error) {
+        if (idRequisicao === requisicaoMapa.current) {
+          console.error('Erro ao atualizar coordenadas do mapa:', error);
+          setErroMapa('Não foi possível localizar esse endereço. Exibindo a última localização válida.');
+        }
+      }
+    }, 1000);
+
+    return () => window.clearTimeout(temporizador);
+  }, [termoMapa]);
+
+  const selecionarImovelNoMapa = (imovel: Imovel) => {
+    const coordenadas = obterCoordenadasImovel(imovel);
+    if (coordenadas) {
+      requisicaoMapa.current++;
+      setCoordsMapa(coordenadas);
+      setTermoMapa('');
+      setErroMapa('');
+      return;
     }
+
+    const endereco = obterEnderecoImovel(imovel);
+    if (endereco) setTermoMapa(endereco);
   };
 
-  const atualizarCoordenadasMapa = async (cidade: string) => {
-    try {
-      const res = await fetch(`/api/mapa?q=${encodeURIComponent(cidade)}`);
-      const dados = await res.json();
-      if (dados?.lat && dados?.lon) {
-        setCoordsMapa({ lat: dados.lat, lon: dados.lon });
-      }
-    } catch {}
-  };
+  const imoveisFiltrados = imoveis.filter((imovel) => {
+    const termoBusca = busca.toLocaleLowerCase();
+    return (
+      (imovel.title || '').toLocaleLowerCase().includes(termoBusca) ||
+      (imovel.location || '').toLocaleLowerCase().includes(termoBusca)
+    );
+  });
 
-  const imoveisFiltrados = imoveis.filter(
-    (i) =>
-      i.title.toLowerCase().includes(busca.toLowerCase()) ||
-      i.location.toLowerCase().includes(busca.toLowerCase())
-  );
-
-  const bbox = `${coordsMapa.lon - 0.08},${coordsMapa.lat - 0.08},${coordsMapa.lon + 0.08},${coordsMapa.lat + 0.08}`;
-  const mapaBase = 'https://openstreetmap.org';
-  const urlMapa = `${mapaBase}?bbox=${bbox}&layer=mapnik&marker=${coordsMapa.lat},${coordsMapa.lon}`;
+  const bbox = [
+    coordsMapa.lon - 0.08,
+    coordsMapa.lat - 0.08,
+    coordsMapa.lon + 0.08,
+    coordsMapa.lat + 0.08,
+  ].join(',');
+  const urlMapa = new URL('https://www.openstreetmap.org/export/embed.html');
+  urlMapa.searchParams.set('bbox', bbox);
+  urlMapa.searchParams.set('layer', 'mapnik');
+  urlMapa.searchParams.set('marker', `${coordsMapa.lat},${coordsMapa.lon}`);
 
   return (
-    <div className="min-h-screen bg-white text-[#222222] font-sans flex flex-col">
-      <header className="border-b border-gray-200 sticky top-0 bg-white z-40">
-        <div className="max-w-[1600px] mx-auto px-6 h-20 flex items-center justify-between gap-4">
+    <div className="flex min-h-screen flex-col bg-white font-sans text-[#222222]">
+      <header className="sticky top-0 z-40 border-b border-gray-200 bg-white">
+        <div className="mx-auto flex h-20 max-w-[1600px] items-center justify-between gap-4 px-4 sm:px-6">
           <LogoGoFerias />
 
-          <div className="hidden sm:flex items-center border border-gray-300 rounded-full px-4 py-2 shadow-xs hover:shadow-md transition w-full max-w-md">
+          <div className="hidden w-full max-w-md items-center rounded-full border border-gray-300 px-4 py-2 shadow-xs transition hover:shadow-md sm:flex">
+            <label htmlFor="busca-destino" className="sr-only">Buscar acomodação ou destino</label>
             <input
-              type="text"
+              id="busca-destino"
+              type="search"
               value={busca}
-              onChange={(e) => {
-                setBusca(e.target.value);
-                if (e.target.value.length > 3) atualizarCoordenadasMapa(e.target.value);
+              onChange={(event) => {
+                const valor = event.target.value;
+                setBusca(valor);
+                setTermoMapa(valor.trim().length > 3 ? valor : '');
               }}
               placeholder="Para onde você vai? (Ex: Florianópolis, São Paulo)"
-              className="w-full text-sm focus:outline-none bg-transparent"
+              className="w-full bg-transparent text-sm outline-none"
             />
-            <span className="w-8 h-8 rounded-full bg-[#E87722] text-white flex items-center justify-center text-xs font-bold shrink-0">
+            <span aria-hidden="true" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#E87722] text-xs font-bold text-white">
               🔍
             </span>
           </div>
 
-          <div className="flex items-center gap-4">
-            <Link href="/viagens" className="text-sm font-semibold text-gray-800 hover:bg-gray-100 px-3.5 py-2 rounded-full transition">
+          <nav className="flex items-center gap-1 sm:gap-4" aria-label="Navegação principal">
+            <Link href="/viagens" className="rounded-full px-2.5 py-2 text-xs font-semibold text-gray-800 transition hover:bg-gray-100 sm:px-3.5 sm:text-sm">
               Minhas Viagens
             </Link>
-            <Link href="/anfitriao" className="text-sm font-semibold text-[#155E75] hover:bg-gray-100 px-3.5 py-2 rounded-full transition">
+            <Link href="/anfitriao" className="rounded-full px-2.5 py-2 text-xs font-semibold text-[#155E75] transition hover:bg-gray-100 sm:px-3.5 sm:text-sm">
               Anuncie seu espaço
             </Link>
-            <button onClick={async () => { await supabase.auth.signOut(); router.push('/'); }} className="text-sm font-medium text-gray-500 hover:text-black">
+            <button
+              type="button"
+              onClick={async () => {
+                await supabase.auth.signOut();
+                router.push('/');
+              }}
+              className="px-2 py-2 text-xs font-medium text-gray-500 transition hover:text-black sm:text-sm"
+            >
               Sair
             </button>
-          </div>
+          </nav>
         </div>
       </header>
 
-      <div className="flex-1 flex flex-col lg:flex-row max-w-[1600px] w-full mx-auto">
-        <main className="w-full lg:w-3/5 px-6 py-8">
-          <p className="text-xs font-semibold text-gray-500 mb-6">
+      <div className="mx-auto flex w-full max-w-[1600px] flex-1 flex-col lg:flex-row">
+        <main className="w-full px-4 py-8 sm:px-6 lg:w-3/5">
+          <p className="mb-6 text-xs font-semibold text-gray-500">
             {imoveisFiltrados.length} acomodação(ões) disponível(is)
           </p>
 
           {carregando ? (
-            <p className="text-gray-500 text-sm">Carregando acomodações...</p>
+            <p className="text-sm text-gray-500" role="status">Carregando acomodações...</p>
           ) : imoveisFiltrados.length === 0 ? (
-            <div className="text-center py-16">
+            <div className="py-16 text-center">
               <p className="text-lg font-semibold text-gray-800">Nenhuma acomodação encontrada</p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-10">
+            <div className="grid grid-cols-1 gap-x-6 gap-y-10 sm:grid-cols-2">
               {imoveisFiltrados.map((imovel) => {
                 const imovelCincoFotos = {
                   ...imovel,
@@ -122,52 +254,59 @@ export default function Marketplace() {
                 };
 
                 return (
-                  <div
+                  <Link
                     key={imovel.id}
-                    onClick={() => router.push(`/imovel/${imovel.id}`)}
-                    onMouseEnter={() => {
-                      const termo =
-                        imovel.street && imovel.city
-                          ? `${imovel.street}, ${imovel.city}, ${imovel.state}`
-                          : imovel.cep || imovel.location;
-                      if (termo && termo !== 'Não informada') {
-                        atualizarCoordenadasMapa(termo);
-                      }
-                    }}
-                    className="group cursor-pointer flex flex-col"
+                    href={`/imovel/${imovel.id}`}
+                    onMouseEnter={() => selecionarImovelNoMapa(imovel)}
+                    onFocus={() => selecionarImovelNoMapa(imovel)}
+                    className="group flex cursor-pointer flex-col rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-[#155E75] focus-visible:ring-offset-4"
                   >
-                    <div className="rounded-2xl overflow-hidden aspect-4/3 bg-gray-100 mb-3">
-                      <GaleriaCard imovel={imovelCincoFotos} />
+                    <div className="mb-3 aspect-4/3 overflow-hidden rounded-2xl bg-gray-100">
+                      <GaleriaCard imovel={imovelCincoFotos} mostrarControles={false} />
                     </div>
 
-                    <div className="flex justify-between items-start gap-2">
-                      <h3 className="font-semibold text-[15px] text-gray-900 line-clamp-1">{imovel.location}</h3>
-                      <span className="text-xs font-medium text-gray-800 shrink-0">★ Novo</span>
+                    <div className="flex items-start justify-between gap-2">
+                      <h2 className="line-clamp-1 text-[15px] font-semibold text-gray-900">
+                        {imovel.location || 'Localização não informada'}
+                      </h2>
+                      <span className="shrink-0 text-xs font-medium text-gray-800">★ Novo</span>
                     </div>
 
-                    <p className="text-sm text-gray-500 line-clamp-1 mt-0.5">{imovel.title}</p>
+                    <p className="mt-0.5 line-clamp-1 text-sm text-gray-500">{imovel.title || 'Acomodação'}</p>
 
-                    <div className="mt-1.5 flex items-baseline gap-1">
-                      <strong className="font-semibold text-[15px] text-gray-900">R$ {imovel.price_per_night}</strong>
+                    <div className="mt-1.5 flex flex-wrap items-baseline gap-1">
+                      <strong className="text-[15px] font-semibold text-gray-900">
+                        R$ {Number(imovel.price_per_night || 0).toLocaleString('pt-BR')}
+                      </strong>
                       <span className="text-sm text-gray-600">noite</span>
                       {Number(imovel.cleaning_fee) > 0 && (
-                        <span className="text-xs text-gray-400 ml-1">(+ R$ {imovel.cleaning_fee} limpeza)</span>
+                        <span className="ml-1 text-xs text-gray-400">
+                          (+ R$ {Number(imovel.cleaning_fee).toLocaleString('pt-BR')} limpeza)
+                        </span>
                       )}
                     </div>
-                  </div>
+                  </Link>
                 );
               })}
             </div>
           )}
         </main>
 
-        <aside className="hidden lg:block lg:w-2/5 sticky top-20 h-[calc(100vh-5rem)] border-l border-gray-200 bg-gray-100">
+        <aside className="w-full border-t border-gray-200 bg-gray-100 p-4 lg:sticky lg:top-20 lg:h-[calc(100vh-5rem)] lg:min-h-[500px] lg:w-2/5 lg:border-l lg:border-t-0 lg:p-0">
+          <div className="mb-2 flex items-center justify-between lg:hidden">
+            <h2 className="text-sm font-semibold text-gray-800">Mapa das acomodações</h2>
+            <span className="text-xs text-gray-500">Arraste para explorar</span>
+          </div>
+          {erroMapa && (
+            <p className="mb-2 text-xs text-amber-800" role="status">{erroMapa}</p>
+          )}
           <iframe
-            title="Mapa interativo"
-            width="100%"
-            height="100%"
-            style={{ border: 0 }}
-            src={urlMapa}
+            key={`${coordsMapa.lat},${coordsMapa.lon}`}
+            title="Mapa interativo das acomodações"
+            loading="lazy"
+            referrerPolicy="no-referrer-when-downgrade"
+            className="h-[420px] w-full rounded-xl border-0 bg-gray-100 lg:h-full lg:rounded-none"
+            src={urlMapa.toString()}
           />
         </aside>
       </div>
