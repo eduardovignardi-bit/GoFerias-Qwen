@@ -6,16 +6,15 @@ export async function POST(request: Request) {
     const token = (process.env.MP_ACCESS_TOKEN || '').trim();
     if (!token || token.length < 15) {
       return NextResponse.json(
-        { error: 'Chave MP_ACCESS_TOKEN ausente ou inválida no .env.local.' },
+        { error: 'Chave MP_ACCESS_TOKEN ausente ou inválida.' },
         { status: 400 }
       );
     }
 
     const { propertyId, title, userEmail } = await request.json();
-    const origin = request.headers.get('origin') || 'http://localhost:3000';
+    const origin = request.headers.get('origin') || 'https://goferias.com.br';
     const isLocalhost = origin.includes('localhost') || origin.includes('127.0.0.1');
 
-    // Inicializa o SDK oficial do Mercado Pago
     const client = new MercadoPagoConfig({ accessToken: token });
     const preference = new Preference(client);
 
@@ -30,8 +29,9 @@ export async function POST(request: Request) {
         },
       ],
       payer: {
-        email: userEmail || 'anfitriao@goferias.com',
+        email: userEmail || 'anfitriao@goferias.com.br',
       },
+      external_reference: String(propertyId),
       back_urls: {
         success: `${origin}/anfitriao?pagamento=sucesso&imovelId=${propertyId}`,
         failure: `${origin}/anfitriao?pagamento=falha`,
@@ -41,6 +41,7 @@ export async function POST(request: Request) {
 
     if (!isLocalhost) {
       bodyMP.auto_return = 'approved';
+      bodyMP.notification_url = `${origin}/api/webhook/mercadopago`;
     }
 
     const response = await preference.create({ body: bodyMP });
