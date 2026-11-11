@@ -81,7 +81,10 @@ export default function Marketplace() {
           </div>
 
           <div className="flex items-center gap-4">
-            <Link href="/anfitriao" className="text-sm font-semibold text-[#155E75] hover:bg-gray-100 px-4 py-2 rounded-full transition">
+            <Link href="/viagens" className="text-sm font-semibold text-gray-800 hover:bg-gray-100 px-3.5 py-2 rounded-full transition">
+              Minhas Viagens
+            </Link>
+            <Link href="/anfitriao" className="text-sm font-semibold text-[#155E75] hover:bg-gray-100 px-3.5 py-2 rounded-full transition">
               Anuncie seu espaço
             </Link>
             <button onClick={async () => { await supabase.auth.signOut(); router.push('/'); }} className="text-sm font-medium text-gray-500 hover:text-black">
@@ -116,8 +119,12 @@ export default function Marketplace() {
                     href={`/imovel/${imovel.id}`}
                     key={imovel.id}
                     onMouseEnter={() => {
-                      if (imovel.location && imovel.location !== 'Não informada') {
-                        atualizarCoordenadasMapa(imovel.location);
+                      const termo =
+                        imovel.street && imovel.city
+                          ? `${imovel.street}, ${imovel.city}, ${imovel.state}`
+                          : imovel.cep || imovel.location;
+                      if (termo && termo !== 'Não informada') {
+                        atualizarCoordenadasMapa(termo);
                       }
                     }}
                     className="group cursor-pointer flex flex-col"
