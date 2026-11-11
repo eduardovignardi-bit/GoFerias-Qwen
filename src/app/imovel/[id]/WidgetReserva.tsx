@@ -1,52 +1,101 @@
 'use client';
-import { useState, useEffect } from 'react';
+
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 
-export default function WidgetReserva({ imovel }: any) {
+type Reserva = {
+  check_in: string;
+  check_out: string;
+};
+
+type ImovelReservavel = {
+  id: string;
+  price_per_night: number | string;
+  cleaning_fee?: number | string | null;
+};
+
+export default function WidgetReserva({ imovel }: { imovel: ImovelReservavel }) {
   const router = useRouter();
-  const [reservas, setReservas] = useState<any[]>([]);
-  const [mesAtual, setMesAtual] = useState(new Date());
+  const [reservas, setReservas] = useState<Reserva[]>([]);
+  const [carregandoDisponibilidade, setCarregandoDisponibilidade] = useState(true);
+  const [imovelCarregadoId, setImovelCarregadoId] = useState<string | null>(null);
+  const [tentativaAtualizacao, setTentativaAtualizacao] = useState(0);
+  const [erroDisponibilidade, setErroDisponibilidade] = useState('');
+  const [mensagem, setMensagem] = useState('');
+  const [mesAtual, setMesAtual] = useState(() => new Date());
   const [checkIn, setCheckIn] = useState<string | null>(null);
   const [checkOut, setCheckOut] = useState<string | null>(null);
   const [reservando, setReservando] = useState(false);
 
   useEffect(() => {
-    buscarReservas();
-  }, [imovel.id]);
+    let ativo = true;
 
-  const buscarReservas = async () => {
-    const { data } = await supabase
-      .from('bookings')
-      .select('check_in, check_out')
-      .eq('property_id', imovel.id);
-    if (data) setReservas(data);
+    const buscarReservas = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('bookings')
+          .select('check_in, check_out')
+          .eq('property_id', imovel.id);
+
+        if (error) throw error;
+        if (!ativo) return;
+        setReservas(data || []);
+        setErroDisponibilidade('');
+        setCheckIn(null);
+        setCheckOut(null);
+        setMensagem('');
+      } catch (error) {
+        if (!ativo) return;
+        console.error('Erro ao carregar disponibilidade:', error);
+        setErroDisponibilidade('Não foi possível carregar a disponibilidade. Tente novamente.');
+      } finally {
+        if (ativo) {
+          setCarregandoDisponibilidade(false);
+          setImovelCarregadoId(imovel.id);
+        }
+      }
+    };
+
+    void buscarReservas();
+    return () => {
+      ativo = false;
+    };
+  }, [imovel.id, tentativaAtualizacao]);
+
+  const recarregarDisponibilidade = () => {
+    setCarregandoDisponibilidade(true);
+    setErroDisponibilidade('');
+    setReservas([]);
+    setCheckIn(null);
+    setCheckOut(null);
+    setMensagem('');
+    setTentativaAtualizacao((tentativa) => tentativa + 1);
   };
+
+  const disponibilidadeCarregando =
+    carregandoDisponibilidade || imovelCarregadoId !== imovel.id;
 
   const isOcupado = (dataStr: string) =>
-    reservas.some((r) => dataStr >= r.check_in && dataStr < r.check_out);
+    imovelCarregadoId === imovel.id &&
+    reservas.some((reserva) => dataStr >= reserva.check_in && dataStr < reserva.check_out);
 
-  const temConflito = (ini: string, fim: string) => {
-    let atual = new Date(ini + 'T12:00:00');
-    const limite = new Date(fim + 'T12:00:00');
-    while (atual < limite) {
-      if (isOcupado(atual.toISOString().split('T')[0])) return true;
-      atual.setDate(atual.getDate() + 1);
-    }
-    return false;
-  };
+  const temConflito = (inicio: string, fim: string) =>
+    imovelCarregadoId === imovel.id &&
+    reservas.some((reserva) => inicio < reserva.check_out && fim > reserva.check_in);
 
   const handleDia = (dataStr: string) => {
-    if (isOcupado(dataStr)) return;
-    if (!checkIn || (checkIn && checkOut)) {
+    if (disponibilidadeCarregando || erroDisponibilidade || isOcupado(dataStr) || reservando) return;
+
+    setMensagem('');
+    if (!checkIn || checkOut) {
       setCheckIn(dataStr);
       setCheckOut(null);
     } else if (dataStr <= checkIn) {
       setCheckIn(dataStr);
+    } else if (temConflito(checkIn, dataStr)) {
+      setMensagem('O período selecionado inclui datas ocupadas. Escolha outras datas.');
     } else {
-      if (temConflito(checkIn, dataStr)) {
-        return alert('Existem datas já reservadas (em vermelho) neste período.');
-      }
       setCheckOut(dataStr);
     }
   };
@@ -55,48 +104,55 @@ export default function WidgetReserva({ imovel }: any) {
   const mes = mesAtual.getMonth();
   const primeiroDia = new Date(ano, mes, 1).getDay();
   const totalDias = new Date(ano, mes + 1, 0).getDate();
+  const dias: Array<{ dia: number; dataStr: string } | null> = [];
 
-  const dias = [];
   for (let i = 0; i < primeiroDia; i++) dias.push(null);
-  for (let d = 1; d <= totalDias; d++) {
+  for (let dia = 1; dia <= totalDias; dia++) {
     dias.push({
-      dia: d,
-      dataStr: `${ano}-${String(mes + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`,
+      dia,
+      dataStr: `${ano}-${String(mes + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`,
     });
   }
 
   const noites =
     checkIn && checkOut
       ? Math.round(
-          (new Date(checkOut + 'T12:00:00').getTime() -
-            new Date(checkIn + 'T12:00:00').getTime()) /
+          (new Date(`${checkOut}T12:00:00`).getTime() -
+            new Date(`${checkIn}T12:00:00`).getTime()) /
             86400000
         )
       : 0;
-
-  const limpeza = Number(imovel.cleaning_fee || 0);
-  const subtotal = noites * Number(imovel.price_per_night);
+  const diaria = Number(imovel.price_per_night) || 0;
+  const limpeza = Number(imovel.cleaning_fee) || 0;
+  const subtotal = noites * diaria;
   const total = subtotal + limpeza;
+  const formatarMoeda = (valor: number) =>
+    valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
   const confirmarReserva = async () => {
-    if (!checkIn || !checkOut) return;
+    if (!checkIn || !checkOut || noites <= 0 || disponibilidadeCarregando || erroDisponibilidade) return;
+
     setReservando(true);
+    setMensagem('');
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return alert('Faça login para concluir sua reserva.');
+      if (!user) {
+        setMensagem('Faça login para concluir sua reserva.');
+        return;
+      }
 
-      const { data: conflitos } = await supabase
+      const { data: conflitos, error: erroConflitos } = await supabase
         .from('bookings')
         .select('id')
         .eq('property_id', imovel.id)
         .lt('check_in', checkOut)
         .gt('check_out', checkIn);
 
-      if (conflitos && conflitos.length > 0) {
-        buscarReservas();
-        setCheckIn(null);
-        setCheckOut(null);
-        return alert('Estas datas acabaram de ser reservadas. Escolha outro período.');
+      if (erroConflitos) throw erroConflitos;
+      if (conflitos?.length) {
+        recarregarDisponibilidade();
+        setMensagem('Estas datas acabaram de ser ocupadas. Atualizamos o calendário; escolha outro período.');
+        return;
       }
 
       const { error } = await supabase.from('bookings').insert([
@@ -112,62 +168,92 @@ export default function WidgetReserva({ imovel }: any) {
       ]);
 
       if (error) throw error;
-      alert(`Reserva confirmada! Total: R$ ${total.toFixed(2)}`);
+      window.alert(`Reserva confirmada! Total: ${formatarMoeda(total)}`);
       router.push('/viagens');
-    } catch (err: any) {
-      alert('Erro ao reservar: ' + err.message);
+    } catch (error) {
+      console.error('Erro ao confirmar reserva:', error);
+      recarregarDisponibilidade();
+      setMensagem('Não foi possível concluir a reserva. Verifique a disponibilidade e tente novamente.');
     } finally {
       setReservando(false);
     }
   };
 
   return (
-    <div className="border border-gray-200 rounded-2xl p-6 shadow-xl bg-white sticky top-28">
-      <div className="flex items-baseline justify-between mb-4">
+    <div className="sticky top-28 rounded-2xl border border-gray-200 bg-white p-6 shadow-xl">
+      <div className="mb-4 flex items-baseline justify-between">
         <div>
-          <strong className="text-2xl font-bold text-[#222222]">R$ {imovel.price_per_night}</strong>
-          <span className="text-sm text-gray-600"> noite</span>
+          <strong className="text-2xl font-bold text-[#222222]">{formatarMoeda(diaria)}</strong>
+          <span className="text-sm text-gray-600"> / noite</span>
         </div>
         <span className="text-xs font-semibold text-gray-500">★ Novo</span>
       </div>
 
-      <div className="flex justify-center gap-3 text-[11px] mb-3">
-        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-emerald-100 border border-emerald-400 inline-block" /> Livre</span>
-        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-red-100 border border-red-400 inline-block" /> Ocupado</span>
-        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-[#155E75] inline-block" /> Seleção</span>
+      <div className="mb-3 flex justify-center gap-3 text-[11px]" aria-label="Legenda de disponibilidade">
+        <span className="flex items-center gap-1">
+          <span className="inline-block h-2.5 w-2.5 rounded border border-emerald-400 bg-emerald-100" />
+          Livre
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block h-2.5 w-2.5 rounded border border-red-400 bg-red-100" />
+          Ocupado
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block h-2.5 w-2.5 rounded bg-[#155E75]" />
+          Seleção
+        </span>
       </div>
 
-      <div className="flex justify-between items-center mb-2 bg-gray-50 px-3 py-1.5 rounded-xl">
-        <button type="button" onClick={() => setMesAtual(new Date(ano, mes - 1, 1))} className="font-bold text-sm px-2">←</button>
-        <span className="font-semibold text-xs capitalize">
+      <div className="mb-2 flex items-center justify-between rounded-xl bg-gray-50 px-3 py-1.5">
+        <button
+          type="button"
+          aria-label="Mês anterior"
+          onClick={() => setMesAtual(new Date(ano, mes - 1, 1))}
+          className="rounded-lg px-2 py-1 text-sm font-bold hover:bg-gray-200"
+        >
+          ←
+        </button>
+        <span className="text-xs font-semibold capitalize">
           {mesAtual.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}
         </span>
-        <button type="button" onClick={() => setMesAtual(new Date(ano, mes + 1, 1))} className="font-bold text-sm px-2">→</button>
+        <button
+          type="button"
+          aria-label="Próximo mês"
+          onClick={() => setMesAtual(new Date(ano, mes + 1, 1))}
+          className="rounded-lg px-2 py-1 text-sm font-bold hover:bg-gray-200"
+        >
+          →
+        </button>
       </div>
 
-      <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-bold text-gray-400 mb-1">
+      <div className="mb-1 grid grid-cols-7 gap-1 text-center text-[10px] font-bold text-gray-400">
         <span>D</span><span>S</span><span>T</span><span>Q</span><span>Q</span><span>S</span><span>S</span>
       </div>
-      <div className="grid grid-cols-7 gap-1 mb-4">
-        {dias.map((item, idx) => {
-          if (!item) return <div key={idx} />;
+      <div className="mb-3 grid grid-cols-7 gap-1">
+        {dias.map((item, index) => {
+          if (!item) return <div key={`vazio-${index}`} />;
           const ocupado = isOcupado(item.dataStr);
-          const sel =
+          const selecionado =
             item.dataStr === checkIn ||
             item.dataStr === checkOut ||
-            (checkIn && checkOut && item.dataStr > checkIn && item.dataStr < checkOut);
+            (!!checkIn && !!checkOut && item.dataStr > checkIn && item.dataStr < checkOut);
 
-          let cor = 'bg-emerald-50 text-emerald-900 border-emerald-200 hover:bg-emerald-100';
-          if (ocupado) cor = 'bg-red-50 text-red-500 border-red-200 line-through cursor-not-allowed';
-          else if (sel) cor = 'bg-[#155E75] text-white border-[#155E75] font-bold';
+          let estilo = 'border-emerald-200 bg-emerald-50 text-emerald-900 hover:bg-emerald-100';
+          if (ocupado) {
+            estilo = 'cursor-not-allowed border-red-200 bg-red-50 text-red-500 line-through';
+          } else if (selecionado) {
+            estilo = 'border-[#155E75] bg-[#155E75] font-bold text-white';
+          }
 
           return (
             <button
               key={item.dataStr}
               type="button"
-              disabled={ocupado}
+              aria-label={`${item.dia}${ocupado ? ', ocupado' : ', livre'}`}
+              aria-pressed={selecionado}
+              disabled={ocupado || disponibilidadeCarregando || !!erroDisponibilidade || reservando}
               onClick={() => handleDia(item.dataStr)}
-              className={`py-1.5 rounded-lg border text-xs transition ${cor}`}
+              className={`rounded-lg border py-1.5 text-xs transition disabled:opacity-80 ${estilo}`}
             >
               {item.dia}
             </button>
@@ -175,40 +261,55 @@ export default function WidgetReserva({ imovel }: any) {
         })}
       </div>
 
-      <div className="grid grid-cols-2 border border-gray-300 rounded-xl overflow-hidden text-xs mb-4">
-        <div className="p-2.5 border-r border-gray-300">
+      {disponibilidadeCarregando && (
+        <p className="mb-3 text-center text-xs text-gray-500" role="status">Carregando disponibilidade...</p>
+      )}
+      {erroDisponibilidade && (
+        <div className="mb-3 rounded-lg bg-red-50 p-3 text-xs text-red-800" role="alert">
+          <p>{erroDisponibilidade}</p>
+          <button type="button" onClick={recarregarDisponibilidade} className="mt-1 font-semibold underline">
+            Tentar novamente
+          </button>
+        </div>
+      )}
+
+      <div className="mb-4 grid grid-cols-2 overflow-hidden rounded-xl border border-gray-300 text-xs">
+        <div className="border-r border-gray-300 p-2.5">
           <span className="block text-[10px] font-bold uppercase text-gray-500">Check-in</span>
-          <span className="font-medium text-gray-900">{checkIn || 'Escolha no mapa'}</span>
+          <span className="font-medium text-gray-900">{checkIn || 'Selecione uma data'}</span>
         </div>
         <div className="p-2.5">
-          <span className="block text-[10px] font-bold uppercase text-gray-500">Checkout</span>
-          <span className="font-medium text-gray-900">{checkOut || 'Escolha no mapa'}</span>
+          <span className="block text-[10px] font-bold uppercase text-gray-500">Check-out</span>
+          <span className="font-medium text-gray-900">{checkOut || 'Selecione uma data'}</span>
         </div>
       </div>
 
+      {mensagem && <p className="mb-3 text-sm text-red-700" role="alert">{mensagem}</p>}
+
       <button
         type="button"
-        disabled={noites === 0 || reservando}
-        onClick={confirmarReserva}
-        className="w-full py-3.5 bg-[#E87722] hover:bg-[#d16617] text-white font-bold rounded-xl text-sm disabled:bg-gray-300 transition shadow-sm"
+        disabled={noites <= 0 || reservando || disponibilidadeCarregando || !!erroDisponibilidade}
+        onClick={() => void confirmarReserva()}
+        className="w-full rounded-xl bg-[#E87722] py-3.5 text-sm font-bold text-white shadow-sm transition hover:bg-[#d16617] disabled:cursor-not-allowed disabled:bg-gray-300"
       >
         {reservando ? 'Confirmando...' : noites > 0 ? 'Reservar agora' : 'Selecione as datas'}
       </button>
 
       {noites > 0 && (
-        <div className="mt-4 pt-4 border-t border-gray-200 space-y-2 text-sm text-gray-700">
+        <div className="mt-4 space-y-2 border-t border-gray-200 pt-4 text-sm text-gray-700">
           <div className="flex justify-between">
-            <span className="underline">R$ {imovel.price_per_night} x {noites} noite(s)</span>
-            <span>R$ {subtotal.toFixed(2)}</span>
+            <span>{formatarMoeda(diaria)} × {noites} noite(s)</span>
+            <span>{formatarMoeda(subtotal)}</span>
           </div>
           <div className="flex justify-between">
-            <span className="underline">Taxa de limpeza</span>
-            <span>R$ {limpeza.toFixed(2)}</span>
+            <span>Taxa de limpeza</span>
+            <span>{formatarMoeda(limpeza)}</span>
           </div>
-          <div className="flex justify-between font-bold text-base text-gray-900 pt-3 border-t border-gray-200">
-            <span>Total</span>
-            <span>R$ {total.toFixed(2)}</span>
+          <div className="flex justify-between border-t border-gray-200 pt-3 text-base font-bold text-gray-900">
+            <span>Total da estadia</span>
+            <span>{formatarMoeda(total)}</span>
           </div>
+          <p className="text-right text-xs text-gray-500">Total já inclui a taxa de limpeza.</p>
         </div>
       )}
     </div>

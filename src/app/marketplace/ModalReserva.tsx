@@ -1,112 +1,173 @@
 'use client';
-import { useState, useEffect } from 'react';
+
+import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 
-export default function ModalReserva({ imovel, onClose }: any) {
-  const [reservasExistentes, setReservasExistentes] = useState<any[]>([]);
-  const [mesAtual, setMesAtual] = useState(new Date());
+type Reserva = {
+  check_in: string;
+  check_out: string;
+};
+
+type ImovelReservavel = {
+  id: string;
+  title: string;
+  price_per_night: number | string;
+  cleaning_fee?: number | string | null;
+};
+
+export default function ModalReserva({
+  imovel,
+  onClose,
+}: {
+  imovel: ImovelReservavel;
+  onClose: () => void;
+}) {
+  const [reservasExistentes, setReservasExistentes] = useState<Reserva[]>([]);
+  const [carregandoDisponibilidade, setCarregandoDisponibilidade] = useState(true);
+  const [imovelCarregadoId, setImovelCarregadoId] = useState<string | null>(null);
+  const [tentativaAtualizacao, setTentativaAtualizacao] = useState(0);
+  const [erroDisponibilidade, setErroDisponibilidade] = useState('');
+  const [mensagem, setMensagem] = useState('');
+  const [mesAtual, setMesAtual] = useState(() => new Date());
   const [checkIn, setCheckIn] = useState<string | null>(null);
   const [checkOut, setCheckOut] = useState<string | null>(null);
   const [reservando, setReservando] = useState(false);
 
   useEffect(() => {
-    buscarReservas();
-  }, [imovel.id]);
+    let ativo = true;
 
-  const buscarReservas = async () => {
-    const { data } = await supabase
-      .from('bookings')
-      .select('check_in, check_out')
-      .eq('property_id', imovel.id);
-    if (data) setReservasExistentes(data);
+    const buscarReservas = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('bookings')
+          .select('check_in, check_out')
+          .eq('property_id', imovel.id);
+
+        if (error) throw error;
+        if (!ativo) return;
+        setReservasExistentes(data || []);
+        setErroDisponibilidade('');
+        setCheckIn(null);
+        setCheckOut(null);
+        setMensagem('');
+      } catch (error) {
+        if (!ativo) return;
+        console.error('Erro ao carregar disponibilidade:', error);
+        setErroDisponibilidade('Não foi possível carregar a disponibilidade. Tente novamente.');
+      } finally {
+        if (ativo) {
+          setCarregandoDisponibilidade(false);
+          setImovelCarregadoId(imovel.id);
+        }
+      }
+    };
+
+    void buscarReservas();
+    return () => {
+      ativo = false;
+    };
+  }, [imovel.id, tentativaAtualizacao]);
+
+  const recarregarDisponibilidade = () => {
+    setCarregandoDisponibilidade(true);
+    setErroDisponibilidade('');
+    setReservasExistentes([]);
+    setCheckIn(null);
+    setCheckOut(null);
+    setMensagem('');
+    setTentativaAtualizacao((tentativa) => tentativa + 1);
   };
 
-  // Verifica se uma data YYYY-MM-DD está ocupada
-  const isDataReservada = (dataStr: string) => {
-    return reservasExistentes.some(
-      (r) => dataStr >= r.check_in && dataStr < r.check_out
+  const disponibilidadeCarregando =
+    carregandoDisponibilidade || imovelCarregadoId !== imovel.id;
+
+  const isDataReservada = (dataStr: string) =>
+    imovelCarregadoId === imovel.id &&
+    reservasExistentes.some(
+      (reserva) => dataStr >= reserva.check_in && dataStr < reserva.check_out
     );
-  };
 
-  // Verifica se há algum dia reservado no meio do intervalo escolhido (Anti-Overbooking)
-  const temOverbookingNoIntervalo = (inicio: string, fim: string) => {
-    let atual = new Date(inicio + 'T12:00:00');
-    const limite = new Date(fim + 'T12:00:00');
-    while (atual < limite) {
-      const str = atual.toISOString().split('T')[0];
-      if (isDataReservada(str)) return true;
-      atual.setDate(atual.getDate() + 1);
-    }
-    return false;
-  };
+  const temConflitoNoIntervalo = (inicio: string, fim: string) =>
+    imovelCarregadoId === imovel.id &&
+    reservasExistentes.some(
+      (reserva) => inicio < reserva.check_out && fim > reserva.check_in
+    );
 
   const handleCliqueDia = (dataStr: string) => {
-    if (isDataReservada(dataStr)) return;
+    if (
+      disponibilidadeCarregando ||
+      erroDisponibilidade ||
+      isDataReservada(dataStr) ||
+      reservando
+    ) {
+      return;
+    }
 
-    if (!checkIn || (checkIn && checkOut)) {
+    setMensagem('');
+    if (!checkIn || checkOut) {
       setCheckIn(dataStr);
       setCheckOut(null);
     } else if (dataStr <= checkIn) {
       setCheckIn(dataStr);
+    } else if (temConflitoNoIntervalo(checkIn, dataStr)) {
+      setMensagem('O período selecionado inclui datas ocupadas. Escolha outras datas.');
     } else {
-      if (temOverbookingNoIntervalo(checkIn, dataStr)) {
-        alert('Período inválido! Existem datas já reservadas (em vermelho) dentro deste intervalo.');
-        return;
-      }
       setCheckOut(dataStr);
     }
   };
 
-  // Gera os dias do mês exibido no calendário
   const ano = mesAtual.getFullYear();
   const mes = mesAtual.getMonth();
   const primeiroDiaSemana = new Date(ano, mes, 1).getDay();
   const totalDiasMes = new Date(ano, mes + 1, 0).getDate();
+  const diasCalendario: Array<{ dia: number; dataStr: string } | null> = [];
 
-  const diasCalendario = [];
   for (let i = 0; i < primeiroDiaSemana; i++) diasCalendario.push(null);
-  for (let d = 1; d <= totalDiasMes; d++) {
-    const dataFormatada = `${ano}-${String(mes + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    diasCalendario.push({ dia: d, dataStr: dataFormatada });
+  for (let dia = 1; dia <= totalDiasMes; dia++) {
+    diasCalendario.push({
+      dia,
+      dataStr: `${ano}-${String(mes + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`,
+    });
   }
 
-  // Cálculo de Diárias + Taxa de Limpeza
-  const calcularNoites = () => {
-    if (!checkIn || !checkOut) return 0;
-    const d1 = new Date(checkIn + 'T12:00:00');
-    const d2 = new Date(checkOut + 'T12:00:00');
-    return Math.round((d2.getTime() - d1.getTime()) / (1000 * 60 * 60 * 24));
-  };
-
-  const noites = calcularNoites();
-  const taxaLimpeza = Number(imovel.cleaning_fee || 0);
-  const subtotalDiarias = noites * Number(imovel.price_per_night);
+  const noites =
+    checkIn && checkOut
+      ? Math.round(
+          (new Date(`${checkOut}T12:00:00`).getTime() -
+            new Date(`${checkIn}T12:00:00`).getTime()) /
+            86400000
+        )
+      : 0;
+  const diaria = Number(imovel.price_per_night) || 0;
+  const taxaLimpeza = Number(imovel.cleaning_fee) || 0;
+  const subtotalDiarias = noites * diaria;
   const valorTotal = subtotalDiarias + taxaLimpeza;
+  const formatarMoeda = (valor: number) =>
+    valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
   const confirmarReserva = async () => {
-    if (!checkIn || !checkOut) return;
-    setReservando(true);
+    if (!checkIn || !checkOut || noites <= 0 || disponibilidadeCarregando || erroDisponibilidade) return;
 
+    setReservando(true);
+    setMensagem('');
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
-        alert('Você precisa estar logado para reservar.');
+        setMensagem('Você precisa estar logado para reservar.');
         return;
       }
 
-      // Dupla checagem no banco antes de salvar para evitar overbooking simultâneo
-      const { data: conflitos } = await supabase
+      const { data: conflitos, error: erroConflitos } = await supabase
         .from('bookings')
         .select('id')
         .eq('property_id', imovel.id)
         .lt('check_in', checkOut)
         .gt('check_out', checkIn);
 
-      if (conflitos && conflitos.length > 0) {
-        alert('Ops! Alguém acabou de reservar essas datas. Atualizando calendário...');
-        buscarReservas();
-        setCheckIn(null);
-        setCheckOut(null);
+      if (erroConflitos) throw erroConflitos;
+      if (conflitos?.length) {
+        recarregarDisponibilidade();
+        setMensagem('Estas datas acabaram de ser ocupadas. Atualizamos o calendário; escolha outro período.');
         return;
       }
 
@@ -124,78 +185,104 @@ export default function ModalReserva({ imovel, onClose }: any) {
 
       if (error) throw error;
 
-      alert(`Reserva confirmada com sucesso! Total: R$ ${valorTotal.toFixed(2)}`);
+      window.alert(`Reserva confirmada com sucesso! Total: ${formatarMoeda(valorTotal)}`);
       onClose();
-    } catch (err: any) {
-      alert('Erro ao confirmar reserva: ' + err.message);
+    } catch (error) {
+      console.error('Erro ao confirmar reserva:', error);
+      recarregarDisponibilidade();
+      setMensagem('Não foi possível concluir a reserva. Verifique a disponibilidade e tente novamente.');
     } finally {
       setReservando(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl max-h-[92vh] overflow-y-auto">
-        <div className="flex justify-between items-center border-b pb-3 mb-4">
-          <h3 className="text-lg font-bold line-clamp-1">{imovel.title}</h3>
-          <button onClick={onClose} className="font-bold text-gray-500">X</button>
-        </div>
-
-        {/* Legenda de Cores */}
-        <div className="flex justify-center gap-4 text-xs mb-4">
-          <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-emerald-100 border border-emerald-400 inline-block"></span> Livre</span>
-          <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-100 border border-red-400 inline-block"></span> Reservado</span>
-          <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-blue-600 inline-block"></span> Selecionado</span>
-        </div>
-
-        {/* Navegação do Mês */}
-        <div className="flex justify-between items-center mb-3 bg-gray-50 p-2 rounded-xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="modal-reserva-titulo"
+        className="max-h-[92vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl"
+      >
+        <div className="mb-4 flex items-center justify-between border-b border-gray-200 pb-3">
+          <h2 id="modal-reserva-titulo" className="line-clamp-1 text-lg font-bold text-gray-900">
+            {imovel.title}
+          </h2>
           <button
             type="button"
+            aria-label="Fechar reserva"
+            onClick={onClose}
+            className="ml-3 rounded-full px-2 py-1 text-lg text-gray-500 transition hover:bg-gray-100 hover:text-gray-900"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="mb-4 flex justify-center gap-4 text-xs" aria-label="Legenda de disponibilidade">
+          <span className="flex items-center gap-1">
+            <span className="inline-block h-3 w-3 rounded border border-emerald-400 bg-emerald-100" />
+            Livre
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="inline-block h-3 w-3 rounded border border-red-400 bg-red-100" />
+            Ocupado
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="inline-block h-3 w-3 rounded bg-[#155E75]" />
+            Seleção
+          </span>
+        </div>
+
+        <div className="mb-3 flex items-center justify-between rounded-xl bg-gray-50 p-2">
+          <button
+            type="button"
+            aria-label="Mês anterior"
             onClick={() => setMesAtual(new Date(ano, mes - 1, 1))}
-            className="px-3 py-1 font-bold text-sm hover:bg-gray-200 rounded-lg"
+            className="rounded-lg px-3 py-1 text-sm font-bold transition hover:bg-gray-200"
           >
             ←
           </button>
-          <span className="font-bold text-sm capitalize">
+          <span className="text-sm font-bold capitalize">
             {mesAtual.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}
           </span>
           <button
             type="button"
+            aria-label="Próximo mês"
             onClick={() => setMesAtual(new Date(ano, mes + 1, 1))}
-            className="px-3 py-1 font-bold text-sm hover:bg-gray-200 rounded-lg"
+            className="rounded-lg px-3 py-1 text-sm font-bold transition hover:bg-gray-200"
           >
             →
           </button>
         </div>
 
-        {/* Grade do Calendário */}
-        <div className="grid grid-cols-7 gap-1 text-center text-xs font-bold text-gray-500 mb-1">
+        <div className="mb-1 grid grid-cols-7 gap-1 text-center text-[11px] font-bold text-gray-500">
           <span>Dom</span><span>Seg</span><span>Ter</span><span>Qua</span><span>Qui</span><span>Sex</span><span>Sáb</span>
         </div>
-        <div className="grid grid-cols-7 gap-1 mb-5">
-          {diasCalendario.map((item, idx) => {
-            if (!item) return <div key={idx} />;
+        <div className="mb-3 grid grid-cols-7 gap-1">
+          {diasCalendario.map((item, index) => {
+            if (!item) return <div key={`vazio-${index}`} />;
             const ocupado = isDataReservada(item.dataStr);
             const selecionado =
               item.dataStr === checkIn ||
               item.dataStr === checkOut ||
-              (checkIn && checkOut && item.dataStr > checkIn && item.dataStr < checkOut);
+              (!!checkIn && !!checkOut && item.dataStr > checkIn && item.dataStr < checkOut);
 
-            let estilo = 'bg-emerald-100 text-emerald-900 border-emerald-300 hover:bg-emerald-200 cursor-pointer';
+            let estilo = 'border-emerald-200 bg-emerald-50 text-emerald-900 hover:bg-emerald-100';
             if (ocupado) {
-              estilo = 'bg-red-100 text-red-700 border-red-300 line-through cursor-not-allowed opacity-75';
+              estilo = 'cursor-not-allowed border-red-200 bg-red-50 text-red-600 line-through';
             } else if (selecionado) {
-              estilo = 'bg-blue-600 text-white border-blue-700 font-bold cursor-pointer';
+              estilo = 'border-[#155E75] bg-[#155E75] font-bold text-white';
             }
 
             return (
               <button
                 key={item.dataStr}
                 type="button"
-                disabled={ocupado}
+                aria-label={`${item.dia}${ocupado ? ', ocupado' : ', livre'}`}
+                aria-pressed={selecionado}
+                disabled={ocupado || disponibilidadeCarregando || !!erroDisponibilidade || reservando}
                 onClick={() => handleCliqueDia(item.dataStr)}
-                className={`py-2 rounded-lg border text-xs transition ${estilo}`}
+                className={`rounded-lg border py-2 text-xs transition disabled:opacity-80 ${estilo}`}
               >
                 {item.dia}
               </button>
@@ -203,37 +290,51 @@ export default function ModalReserva({ imovel, onClose }: any) {
           })}
         </div>
 
-        {/* Resumo Financeiro da Reserva */}
-        <div className="bg-gray-50 p-4 rounded-xl border space-y-2 text-sm mb-4">
+        {disponibilidadeCarregando && (
+          <p className="mb-3 text-center text-xs text-gray-500" role="status">Carregando disponibilidade...</p>
+        )}
+        {erroDisponibilidade && (
+          <div className="mb-3 rounded-lg bg-red-50 p-3 text-xs text-red-800" role="alert">
+            <p>{erroDisponibilidade}</p>
+            <button type="button" onClick={recarregarDisponibilidade} className="mt-1 font-semibold underline">
+              Tentar novamente
+            </button>
+          </div>
+        )}
+
+        <div className="mb-4 space-y-2 rounded-xl border border-gray-200 bg-gray-50 p-4 text-sm">
           <div className="flex justify-between text-xs text-gray-600">
-            <span>Check-in: <strong>{checkIn || 'Selecione'}</strong></span>
-            <span>Check-out: <strong>{checkOut || 'Selecione'}</strong></span>
+            <span>Check-in: <strong className="text-gray-900">{checkIn || 'Selecione'}</strong></span>
+            <span>Check-out: <strong className="text-gray-900">{checkOut || 'Selecione'}</strong></span>
           </div>
           {noites > 0 && (
             <>
-              <div className="flex justify-between pt-2 border-t">
-                <span>R$ {imovel.price_per_night} x {noites} noite(s)</span>
-                <span>R$ {subtotalDiarias.toFixed(2)}</span>
+              <div className="flex justify-between border-t border-gray-200 pt-2 text-gray-700">
+                <span>{formatarMoeda(diaria)} × {noites} noite(s)</span>
+                <span>{formatarMoeda(subtotalDiarias)}</span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex justify-between text-gray-700">
                 <span>Taxa de limpeza</span>
-                <span>R$ {taxaLimpeza.toFixed(2)}</span>
+                <span>{formatarMoeda(taxaLimpeza)}</span>
               </div>
-              <div className="flex justify-between font-bold text-base pt-2 border-t text-gray-900">
-                <span>Total da Reserva</span>
-                <span>R$ {valorTotal.toFixed(2)}</span>
+              <div className="flex justify-between border-t border-gray-200 pt-2 text-base font-bold text-gray-900">
+                <span>Total da reserva</span>
+                <span>{formatarMoeda(valorTotal)}</span>
               </div>
+              <p className="text-right text-xs text-gray-500">Total já inclui a taxa de limpeza.</p>
             </>
           )}
         </div>
 
+        {mensagem && <p className="mb-3 text-sm text-red-700" role="alert">{mensagem}</p>}
+
         <button
           type="button"
-          disabled={noites === 0 || reservando}
-          onClick={confirmarReserva}
-          className="w-full py-3 bg-rose-600 text-white font-bold rounded-xl hover:bg-rose-700 disabled:bg-gray-300 transition text-sm"
+          disabled={noites <= 0 || reservando || disponibilidadeCarregando || !!erroDisponibilidade}
+          onClick={() => void confirmarReserva()}
+          className="w-full rounded-xl bg-[#E87722] py-3 text-sm font-bold text-white transition hover:bg-[#d16617] disabled:cursor-not-allowed disabled:bg-gray-300"
         >
-          {reservando ? 'Confirmando...' : noites > 0 ? 'Confirmar Reserva' : 'Selecione Check-in e Check-out'}
+          {reservando ? 'Confirmando...' : noites > 0 ? 'Confirmar reserva' : 'Selecione check-in e check-out'}
         </button>
       </div>
     </div>
