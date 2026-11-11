@@ -10,7 +10,7 @@ export default function Marketplace() {
   const router = useRouter();
   const [imoveis, setImoveis] = useState<any[]>([]);
   const [busca, setBusca] = useState('');
-  const [coordsMapa, setCoordsMapa] = useState({ lat: -23.5505, lon: -46.6333 });
+  const [coordsMapa, setCoordsMapa] = useState({ lat: -27.5954, lon: -48.548 });
   const [carregando, setCarregando] = useState(true);
 
   useEffect(() => {
@@ -27,7 +27,7 @@ export default function Marketplace() {
       if (error) throw error;
       if (data) {
         setImoveis(data);
-        const primeiro = data;
+        const primeiro = data[0];
         if (primeiro) {
           const termo =
             primeiro.street && primeiro.city
@@ -62,6 +62,8 @@ export default function Marketplace() {
   );
 
   const bbox = `${coordsMapa.lon - 0.08},${coordsMapa.lat - 0.08},${coordsMapa.lon + 0.08},${coordsMapa.lat + 0.08}`;
+  const mapaBase = 'https://openstreetmap.org';
+  const urlMapa = `${mapaBase}?bbox=${bbox}&layer=mapnik&marker=${coordsMapa.lat},${coordsMapa.lon}`;
 
   return (
     <div className="min-h-screen bg-white text-[#222222] font-sans flex flex-col">
@@ -120,9 +122,9 @@ export default function Marketplace() {
                 };
 
                 return (
-                  <Link
-                    href={`/imovel/${imovel.id}`}
+                  <div
                     key={imovel.id}
+                    onClick={() => router.push(`/imovel/${imovel.id}`)}
                     onMouseEnter={() => {
                       const termo =
                         imovel.street && imovel.city
@@ -152,7 +154,7 @@ export default function Marketplace() {
                         <span className="text-xs text-gray-400 ml-1">(+ R$ {imovel.cleaning_fee} limpeza)</span>
                       )}
                     </div>
-                  </Link>
+                  </div>
                 );
               })}
             </div>
@@ -165,7 +167,7 @@ export default function Marketplace() {
             width="100%"
             height="100%"
             style={{ border: 0 }}
-            src={`https://openstreetmap.org{bbox}&layer=mapnik&marker=${coordsMapa.lat},${coordsMapa.lon}`}
+            src={urlMapa}
           />
         </aside>
       </div>

@@ -1,23 +1,22 @@
 'use client';
 import { useState, useEffect } from 'react';
-import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import LogoGoFerias from '@/components/LogoGoFerias';
 import WidgetReserva from './WidgetReserva';
 
-export default function ConteudoImovel() {
-  const params = useParams();
+export default function ConteudoImovel({ imovelId }: { imovelId: string }) {
   const [imovel, setImovel] = useState<any | null>(null);
-  const [coords, setCoords] = useState({ lat: -23.5505, lon: -46.6333 });
+  const [coords, setCoords] = useState({ lat: -27.5954, lon: -48.548 });
   const [carregando, setCarregando] = useState(true);
   const [verTodasFotos, setVerTodasFotos] = useState(false);
 
   useEffect(() => {
-    if (params?.id) buscarDetalhes(String(params.id));
-  }, [params?.id]);
+    if (imovelId) buscarDetalhes(imovelId);
+  }, [imovelId]);
 
   const buscarDetalhes = async (id: string) => {
+    setCarregando(true);
     try {
       const { data, error } = await supabase
         .from('properties')
@@ -25,12 +24,7 @@ export default function ConteudoImovel() {
         .eq('id', id)
         .single();
 
-      if (error) {
-        console.error('Erro Supabase:', error);
-        return;
-      }
-
-      if (data) {
+      if (!error && data) {
         setImovel(data);
 
         const buscaMapa =
@@ -47,7 +41,7 @@ export default function ConteudoImovel() {
         }
       }
     } catch (err) {
-      console.error('Erro ao carregar imóvel:', err);
+      console.error('Erro ao buscar detalhes:', err);
     } finally {
       setCarregando(false);
     }
@@ -63,10 +57,10 @@ export default function ConteudoImovel() {
 
   if (!imovel) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-4">
-        <p className="text-gray-600">Imóvel não encontrado.</p>
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4 p-6">
+        <p className="text-gray-800 font-semibold">Imóvel não encontrado (ID: {imovelId}).</p>
         <Link href="/marketplace" className="text-sm font-bold text-[#155E75] underline">
-          Voltar para acomodações
+          ← Voltar para acomodações
         </Link>
       </div>
     );
@@ -80,6 +74,8 @@ export default function ConteudoImovel() {
       : [];
 
   const bbox = `${coords.lon - 0.015},${coords.lat - 0.015},${coords.lon + 0.015},${coords.lat + 0.015}`;
+  const mapaBase = 'https://openstreetmap.org';
+  const urlMapa = `${mapaBase}?bbox=${bbox}&layer=mapnik&marker=${coords.lat},${coords.lon}`;
 
   return (
     <div className="min-h-screen bg-white text-[#222222] font-sans">
@@ -104,15 +100,15 @@ export default function ConteudoImovel() {
         {fotos.length > 0 && (
           <div className="relative rounded-2xl overflow-hidden grid grid-cols-1 md:grid-cols-4 gap-2 h-[320px] sm:h-[420px] mb-10 bg-gray-100">
             <div className="md:col-span-2 h-full">
-              <img src={fotos} alt="Principal" className="w-full h-full object-cover" />
+              <img src={fotos[0]} alt="Principal" className="w-full h-full object-cover" />
             </div>
             <div className="hidden md:grid grid-rows-2 gap-2 h-full">
-              {fotos && <img src={fotos} alt="Foto 2" className="w-full h-full object-cover" />}
-              {fotos && <img src={fotos} alt="Foto 3" className="w-full h-full object-cover" />}
+              {fotos[1] && <img src={fotos[1]} alt="Foto 2" className="w-full h-full object-cover" />}
+              {fotos[2] && <img src={fotos[2]} alt="Foto 3" className="w-full h-full object-cover" />}
             </div>
             <div className="hidden md:grid grid-rows-2 gap-2 h-full">
-              {fotos && <img src={fotos} alt="Foto 4" className="w-full h-full object-cover" />}
-              {fotos && <img src={fotos} alt="Foto 5" className="w-full h-full object-cover" />}
+              {fotos[3] && <img src={fotos[3]} alt="Foto 4" className="w-full h-full object-cover" />}
+              {fotos[4] && <img src={fotos[4]} alt="Foto 5" className="w-full h-full object-cover" />}
             </div>
 
             {fotos.length > 1 && (
@@ -156,7 +152,7 @@ export default function ConteudoImovel() {
                   width="100%"
                   height="100%"
                   style={{ border: 0 }}
-                  src={`https://openstreetmap.org{bbox}&layer=mapnik&marker=${coords.lat},${coords.lon}`}
+                  src={urlMapa}
                 />
               </div>
             </div>
