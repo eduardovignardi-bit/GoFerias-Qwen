@@ -15,6 +15,9 @@ export async function POST(request: Request) {
     const origin = request.headers.get('origin') || 'https://goferias.com.br';
     const isLocalhost = origin.includes('localhost') || origin.includes('127.0.0.1');
 
+    // Troque para false quando colocar o Access Token de PRODUÇÃO na Vercel
+    const isModoTeste = true;
+
     const client = new MercadoPagoConfig({ accessToken: token });
     const preference = new Preference(client);
 
@@ -29,7 +32,8 @@ export async function POST(request: Request) {
         },
       ],
       payer: {
-        email: userEmail || 'anfitriao@goferias.com.br',
+        // No modo teste, o Mercado Pago bloqueia se usar seu e-mail real de vendedor
+        email: isModoTeste ? 'comprador_teste@testuser.com' : (userEmail || 'anfitriao@goferias.com.br'),
       },
       external_reference: String(propertyId),
       back_urls: {
@@ -47,7 +51,7 @@ export async function POST(request: Request) {
     const response = await preference.create({ body: bodyMP });
 
     return NextResponse.json({
-      checkoutUrl: response.init_point,
+      checkoutUrl: isModoTeste ? response.sandbox_init_point : response.init_point,
     });
   } catch (error: any) {
     console.error('Erro SDK Mercado Pago:', error);
