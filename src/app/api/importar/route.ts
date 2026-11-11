@@ -1,23 +1,27 @@
 import { NextResponse } from 'next/server';
 import { qwenClient } from '@/lib/openai';
-import { supabase } from '@/lib/supabase';
+import { createAuthenticatedSupabaseClient } from '@/lib/supabase';
 
 export async function POST(request: Request) {
   try {
-    const { url, userId, textoManual } = await request.json();
+    const authorization = request.headers.get('authorization') || '';
+    const accessToken = authorization.match(/^Bearer\s+(.+)$/i)?.[1];
+    if (!accessToken) {
+      return NextResponse.json({ error: 'Usuário não autenticado. Faça login novamente.' }, { status: 401 });
+    }
 
-    if (!userId) {
-      return NextResponse.json(
-        { error: 'Usuário não autenticado. Faça login novamente.' },
-        { status: 401 }
-      );
+    const { url, textoManual } = await request.json();
+    const supabaseAutenticado = createAuthenticatedSupabaseClient(accessToken);
+    const { data: { user }, error: erroUsuario } = await supabaseAutenticado.auth.getUser(accessToken);
+    if (erroUsuario || !user) {
+      return NextResponse.json({ error: 'Sessão inválida. Entre novamente.' }, { status: 401 });
     }
 
     // 1. Verifica quantos imóveis este proprietário já possui
-    const { count, error: countError } = await supabase
+    const { count, error: countError } = await supabaseAutenticado
       .from('properties')
       .select('*', { count: 'exact', head: true })
-      .eq('owner_id', userId);
+      .eq('owner_id', user.id);
 
     if (countError) throw countError;
 
@@ -114,11 +118,11 @@ export async function POST(request: Request) {
     const dadosImovel = JSON.parse(jsonLimpo);
 
     // 4. Salva o imóvel real no Supabase
-    const { data: novoImovel, error: insertError } = await supabase
+    const { data: novoImovel, error: insertError } = await supabaseAutenticado
       .from('properties')
       .insert([
         {
-          owner_id: userId,
+          owner_id: user.id,
           title: dadosImovel.titulo || tituloOriginal || 'Imóvel Importado',
           description: dadosImovel.descricao || descricaoOriginal || 'Descrição importada.',
           location: dadosImovel.localizacao || 'Brasil',
@@ -139,7 +143,7 @@ export async function POST(request: Request) {
       imovel: novoImovel,
       precisaAtivar: !isPrimeiroGratuito,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Erro na importação:', error);
     return NextResponse.json(
       { error: 'Erro ao processar importação. Verifique se o Ollama está aberto.' },
