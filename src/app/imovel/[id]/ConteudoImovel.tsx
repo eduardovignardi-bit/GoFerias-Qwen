@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import LogoGoFerias from '@/components/LogoGoFerias';
@@ -8,14 +8,13 @@ import WidgetReserva from './WidgetReserva';
 
 export default function ConteudoImovel() {
   const params = useParams();
-  const router = useRouter();
   const [imovel, setImovel] = useState<any | null>(null);
-  const [coords, setCoords] = useState({ lat: -27.5954, lon: -48.548 });
+  const [coords, setCoords] = useState({ lat: -23.5505, lon: -46.6333 });
   const [carregando, setCarregando] = useState(true);
   const [verTodasFotos, setVerTodasFotos] = useState(false);
 
   useEffect(() => {
-    if (params?.id) buscarDetalhes(params.id as string);
+    if (params?.id) buscarDetalhes(String(params.id));
   }, [params?.id]);
 
   const buscarDetalhes = async (id: string) => {
@@ -25,25 +24,30 @@ export default function ConteudoImovel() {
         .select('*')
         .eq('id', id)
         .single();
-      if (error) throw error;
-      setImovel(data);
 
-      const buscaMapa =
-        data.street && data.city
-          ? `${data.street}, ${data.city}, ${data.state}, Brasil`
-          : data.cep || data.location;
+      if (error) {
+        console.error('Erro Supabase:', error);
+        return;
+      }
 
-      if (buscaMapa) {
-        const res = await fetch(
-          `https://openstreetmap.org{encodeURIComponent(buscaMapa)}&limit=1`
-        );
-        const geo = await res.json();
-        if (geo && geo[0]) {
-          setCoords({ lat: parseFloat(geo[0].lat), lon: parseFloat(geo[0].lon) });
+      if (data) {
+        setImovel(data);
+
+        const buscaMapa =
+          data.street && data.city
+            ? `${data.street}, ${data.city}, ${data.state}, Brasil`
+            : data.cep || data.location;
+
+        if (buscaMapa) {
+          const res = await fetch(`/api/mapa?q=${encodeURIComponent(buscaMapa)}`);
+          const geo = await res.json();
+          if (geo?.lat && geo?.lon) {
+            setCoords({ lat: geo.lat, lon: geo.lon });
+          }
         }
       }
-    } catch {
-      router.push('/marketplace');
+    } catch (err) {
+      console.error('Erro ao carregar imóvel:', err);
     } finally {
       setCarregando(false);
     }
@@ -52,12 +56,21 @@ export default function ConteudoImovel() {
   if (carregando) {
     return (
       <div className="min-h-screen flex items-center justify-center text-sm text-gray-500">
-        Carregando anúncio...
+        Carregando detalhes do espaço...
       </div>
     );
   }
 
-  if (!imovel) return null;
+  if (!imovel) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4">
+        <p className="text-gray-600">Imóvel não encontrado.</p>
+        <Link href="/marketplace" className="text-sm font-bold text-[#155E75] underline">
+          Voltar para acomodações
+        </Link>
+      </div>
+    );
+  }
 
   const fotos: string[] =
     Array.isArray(imovel.images) && imovel.images.length > 0
@@ -91,15 +104,15 @@ export default function ConteudoImovel() {
         {fotos.length > 0 && (
           <div className="relative rounded-2xl overflow-hidden grid grid-cols-1 md:grid-cols-4 gap-2 h-[320px] sm:h-[420px] mb-10 bg-gray-100">
             <div className="md:col-span-2 h-full">
-              <img src={fotos[0]} alt="Principal" className="w-full h-full object-cover" />
+              <img src={fotos} alt="Principal" className="w-full h-full object-cover" />
             </div>
             <div className="hidden md:grid grid-rows-2 gap-2 h-full">
-              {fotos[1] && <img src={fotos[1]} alt="Foto 2" className="w-full h-full object-cover" />}
-              {fotos[2] && <img src={fotos[2]} alt="Foto 3" className="w-full h-full object-cover" />}
+              {fotos && <img src={fotos} alt="Foto 2" className="w-full h-full object-cover" />}
+              {fotos && <img src={fotos} alt="Foto 3" className="w-full h-full object-cover" />}
             </div>
             <div className="hidden md:grid grid-rows-2 gap-2 h-full">
-              {fotos[3] && <img src={fotos[3]} alt="Foto 4" className="w-full h-full object-cover" />}
-              {fotos[4] && <img src={fotos[4]} alt="Foto 5" className="w-full h-full object-cover" />}
+              {fotos && <img src={fotos} alt="Foto 4" className="w-full h-full object-cover" />}
+              {fotos && <img src={fotos} alt="Foto 5" className="w-full h-full object-cover" />}
             </div>
 
             {fotos.length > 1 && (

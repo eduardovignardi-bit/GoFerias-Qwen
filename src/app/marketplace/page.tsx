@@ -10,7 +10,7 @@ export default function Marketplace() {
   const router = useRouter();
   const [imoveis, setImoveis] = useState<any[]>([]);
   const [busca, setBusca] = useState('');
-  const [coordsMapa, setCoordsMapa] = useState({ lat: -27.5954, lon: -48.548 });
+  const [coordsMapa, setCoordsMapa] = useState({ lat: -23.5505, lon: -46.6333 });
   const [carregando, setCarregando] = useState(true);
 
   useEffect(() => {
@@ -27,8 +27,15 @@ export default function Marketplace() {
       if (error) throw error;
       if (data) {
         setImoveis(data);
-        if (data[0]?.location && data[0].location !== 'Não informada') {
-          atualizarCoordenadasMapa(data[0].location);
+        const primeiro = data;
+        if (primeiro) {
+          const termo =
+            primeiro.street && primeiro.city
+              ? `${primeiro.street}, ${primeiro.city}, ${primeiro.state}`
+              : primeiro.cep || primeiro.location;
+          if (termo && termo !== 'Não informada') {
+            atualizarCoordenadasMapa(termo);
+          }
         }
       }
     } catch (error) {
@@ -40,12 +47,10 @@ export default function Marketplace() {
 
   const atualizarCoordenadasMapa = async (cidade: string) => {
     try {
-      const res = await fetch(
-        `https://openstreetmap.org{encodeURIComponent(cidade)}&limit=1`
-      );
+      const res = await fetch(`/api/mapa?q=${encodeURIComponent(cidade)}`);
       const dados = await res.json();
-      if (dados && dados[0]) {
-        setCoordsMapa({ lat: parseFloat(dados[0].lat), lon: parseFloat(dados[0].lon) });
+      if (dados?.lat && dados?.lon) {
+        setCoordsMapa({ lat: dados.lat, lon: dados.lon });
       }
     } catch {}
   };
@@ -56,7 +61,7 @@ export default function Marketplace() {
       i.location.toLowerCase().includes(busca.toLowerCase())
   );
 
-  const bbox = `${coordsMapa.lon - 0.12},${coordsMapa.lat - 0.12},${coordsMapa.lon + 0.12},${coordsMapa.lat + 0.12}`;
+  const bbox = `${coordsMapa.lon - 0.08},${coordsMapa.lat - 0.08},${coordsMapa.lon + 0.08},${coordsMapa.lat + 0.08}`;
 
   return (
     <div className="min-h-screen bg-white text-[#222222] font-sans flex flex-col">
