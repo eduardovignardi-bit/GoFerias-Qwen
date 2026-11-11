@@ -1,8 +1,10 @@
 'use client';
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 
 export default function WidgetReserva({ imovel }: any) {
+  const router = useRouter();
   const [reservas, setReservas] = useState<any[]>([]);
   const [mesAtual, setMesAtual] = useState(new Date());
   const [checkIn, setCheckIn] = useState<string | null>(null);
@@ -111,9 +113,7 @@ export default function WidgetReserva({ imovel }: any) {
 
       if (error) throw error;
       alert(`Reserva confirmada! Total: R$ ${total.toFixed(2)}`);
-      setCheckIn(null);
-      setCheckOut(null);
-      buscarReservas();
+      router.push('/viagens');
     } catch (err: any) {
       alert('Erro ao reservar: ' + err.message);
     } finally {
