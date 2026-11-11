@@ -3,6 +3,32 @@ import { MercadoPagoConfig, PreApproval } from 'mercadopago';
 import { ADDITIONAL_PROPERTY_MONTHLY_PRICE } from '@/lib/billing';
 import { createAuthenticatedSupabaseClient } from '@/lib/supabase';
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function obterMensagemErroMercadoPago(error: unknown): string {
+  if (!isRecord(error)) {
+    return 'Não foi possível iniciar a assinatura. Tente novamente.';
+  }
+
+  if (typeof error.message === 'string' && error.message.trim()) return error.message;
+
+  const causas = Array.isArray(error.causes)
+    ? error.causes
+    : Array.isArray(error.cause)
+      ? error.cause
+      : [];
+  const descricoes = causas
+    .filter((causa): causa is Record<string, unknown> => isRecord(causa))
+    .map((causa) => causa.description)
+    .filter((descricao): descricao is string => typeof descricao === 'string' && !!descricao.trim());
+
+  if (descricoes.length > 0) return descricoes.join('; ');
+
+  return 'Não foi possível iniciar a assinatura. Tente novamente.';
+}
+
 export async function POST(request: Request) {
   try {
     const token = (process.env.MP_ACCESS_TOKEN || '').trim();
@@ -40,6 +66,13 @@ export async function POST(request: Request) {
     if (erroUsuario || !user) {
       return NextResponse.json({ error: 'Sessão inválida. Entre novamente.' }, { status: 401 });
     }
+    const payerEmail = user.email?.trim();
+    if (!payerEmail) {
+      return NextResponse.json(
+        { error: 'Não foi possível identificar o e-mail da conta para iniciar a assinatura.' },
+        { status: 400 }
+      );
+    }
 
     const { data: imoveisDoAnfitriao, error: erroImoveis } = await supabaseAutenticado
       .from('properties')
@@ -61,20 +94,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Este imóvel já está ativo.' }, { status: 409 });
     }
 
-    const configuredUrl = process.env.NEXT_PUBLIC_SITE_URL;
-    const requestOrigin = new URL(request.url).origin;
-    const origin = configuredUrl
-      ? new URL(configuredUrl).origin
-      : requestOrigin;
-
     const client = new MercadoPagoConfig({ accessToken: token });
     const assinatura = new PreApproval(client);
     const subscriptionBody = {
       reason: `Plano mensal GoFérias - ${imovel.title.slice(0, 50)}`,
       external_reference: String(propertyId),
-      payer_email: user.email,
-      back_url: `${origin}/anfitriao?pagamento=retorno`,
-      notification_url: `${origin}/api/webhook/mercadopago`,
+      payer_email: payerEmail,
+      back_url: 'https://goferias.com.br/anfitriao?pagamento=retorno',
+      notification_url: 'https://goferias.com.br/api/webhook/mercadopago',
       auto_recurring: {
         frequency: 1,
         frequency_type: 'months',
@@ -82,9 +109,16 @@ export async function POST(request: Request) {
         currency_id: 'BRL',
       },
     };
-    const response = await assinatura.create({
-      body: subscriptionBody,
-    });
+    let response: Awaited<ReturnType<typeof assinatura.create>>;
+    try {
+      response = await assinatura.create({
+        body: subscriptionBody,
+      });
+    } catch (error) {
+      const mensagem = obterMensagemErroMercadoPago(error);
+      console.error('Erro ao criar assinatura no Mercado Pago:', mensagem);
+      return NextResponse.json({ error: mensagem }, { status: 502 });
+    }
 
     if (!response.init_point) {
       throw new Error('O Mercado Pago não retornou o endereço de autorização da assinatura.');
