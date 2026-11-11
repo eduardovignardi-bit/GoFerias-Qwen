@@ -38,8 +38,8 @@ export default function ConteudoImovel() {
           `https://openstreetmap.org{encodeURIComponent(buscaMapa)}&limit=1`
         );
         const geo = await res.json();
-        if (geo && geo) {
-          setCoords({ lat: parseFloat(geo.lat), lon: parseFloat(geo.lon) });
+        if (geo && geo[0]) {
+          setCoords({ lat: parseFloat(geo[0].lat), lon: parseFloat(geo[0].lon) });
         }
       }
     } catch {
@@ -91,15 +91,15 @@ export default function ConteudoImovel() {
         {fotos.length > 0 && (
           <div className="relative rounded-2xl overflow-hidden grid grid-cols-1 md:grid-cols-4 gap-2 h-[320px] sm:h-[420px] mb-10 bg-gray-100">
             <div className="md:col-span-2 h-full">
-              <img src={fotos} alt="Principal" className="w-full h-full object-cover" />
+              <img src={fotos[0]} alt="Principal" className="w-full h-full object-cover" />
             </div>
             <div className="hidden md:grid grid-rows-2 gap-2 h-full">
-              {fotos && <img src={fotos} alt="Foto 2" className="w-full h-full object-cover" />}
-              {fotos && <img src={fotos} alt="Foto 3" className="w-full h-full object-cover" />}
+              {fotos[1] && <img src={fotos[1]} alt="Foto 2" className="w-full h-full object-cover" />}
+              {fotos[2] && <img src={fotos[2]} alt="Foto 3" className="w-full h-full object-cover" />}
             </div>
             <div className="hidden md:grid grid-rows-2 gap-2 h-full">
-              {fotos && <img src={fotos} alt="Foto 4" className="w-full h-full object-cover" />}
-              {fotos && <img src={fotos} alt="Foto 5" className="w-full h-full object-cover" />}
+              {fotos[3] && <img src={fotos[3]} alt="Foto 4" className="w-full h-full object-cover" />}
+              {fotos[4] && <img src={fotos[4]} alt="Foto 5" className="w-full h-full object-cover" />}
             </div>
 
             {fotos.length > 1 && (

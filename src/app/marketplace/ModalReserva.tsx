@@ -33,7 +33,7 @@ export default function ModalReserva({ imovel, onClose }: any) {
     let atual = new Date(inicio + 'T12:00:00');
     const limite = new Date(fim + 'T12:00:00');
     while (atual < limite) {
-      const str = atual.toISOString().split('T');
+      const str = atual.toISOString().split('T')[0];
       if (isDataReservada(str)) return true;
       atual.setDate(atual.getDate() + 1);
     }
