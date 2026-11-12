@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
@@ -37,19 +37,136 @@ type Reserva = {
   cleaning_fee: number | string | null;
   total_price: number | string | null;
   status?: string | null;
+  guest_phone?: string | null;
+  guest_phone_number?: string | null;
+  guest_telephone?: string | null;
+  contact_phone?: string | null;
+  phone?: string | null;
+  telefone?: string | null;
+  whatsapp?: string | null;
 };
 
 type AbaPainel = 'visao-geral' | 'imoveis' | 'reservas' | 'assinatura';
+type FiltroReserva = 'todas' | 'confirmadas' | 'pendentes' | 'canceladas';
+type ToastPainel = { mensagem: string; tipo: 'sucesso' | 'erro' | 'info' } | null;
 
 const formatarMoeda = (valor: number) =>
-  valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  (() => {
+    const centavos = Math.round((Number.isFinite(valor) ? valor : 0) * 100);
+    const sinal = centavos < 0 ? '-' : '';
+    const valorAbsoluto = Math.abs(centavos);
+    const reais = Math.floor(valorAbsoluto / 100);
+    const fracao = String(valorAbsoluto % 100).padStart(2, '0');
+    const reaisFormatados = String(reais).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+    return `${sinal}R$ ${reaisFormatados},${fracao}`;
+  })();
 
-const formatarData = (valor: string) =>
-  new Date(`${valor}T12:00:00`).toLocaleDateString('pt-BR');
+const formatarData = (valor: string) => {
+  const partes = /^(\d{4})-(\d{2})-(\d{2})$/.exec(valor);
+  if (!partes) return valor;
+  const [, ano, mes, dia] = partes;
+  const data = new Date(Date.UTC(Number(ano), Number(mes) - 1, Number(dia)));
+  if (
+    data.getUTCFullYear() !== Number(ano) ||
+    data.getUTCMonth() !== Number(mes) - 1 ||
+    data.getUTCDate() !== Number(dia)
+  ) {
+    return valor;
+  }
+  return `${dia}/${mes}/${ano}`;
+};
+
+const diasEntreDatas = (inicio: string, fim: string) => {
+  const obterTimestampUtc = (valor: string) => {
+    const partes = /^(\d{4})-(\d{2})-(\d{2})$/.exec(valor);
+    if (!partes) return Number.NaN;
+    return Date.UTC(Number(partes[1]), Number(partes[2]) - 1, Number(partes[3]));
+  };
+  const diferenca = obterTimestampUtc(fim) - obterTimestampUtc(inicio);
+  return Number.isFinite(diferenca) ? Math.round(diferenca / 86400000) : 0;
+};
+
+function statusReserva(reserva: Reserva) {
+  const status = reserva.status?.toLowerCase();
+  if (status === 'paid' || status === 'approved' || status === 'confirmed') {
+    return { categoria: 'confirmadas' as const, rotulo: 'Confirmada' };
+  }
+  if (status === 'pending') return { categoria: 'pendentes' as const, rotulo: 'Pendente' };
+  if (status === 'cancelled' || status === 'canceled' || status === 'rejected') {
+    return { categoria: 'canceladas' as const, rotulo: 'Cancelada' };
+  }
+  if (status === 'blocked') return { categoria: 'bloqueadas' as const, rotulo: 'Bloqueio' };
+  return { categoria: 'outras' as const, rotulo: 'Não informado' };
+}
+
+function telefoneDaReserva(reserva: Reserva) {
+  return (
+    reserva.guest_phone ||
+    reserva.guest_phone_number ||
+    reserva.guest_telephone ||
+    reserva.contact_phone ||
+    reserva.phone ||
+    reserva.telefone ||
+    reserva.whatsapp ||
+    ''
+  );
+}
+
+function linkWhatsApp(reserva: Reserva, tituloImovel: string) {
+  const telefone = telefoneDaReserva(reserva).replace(/\D/g, '');
+  if (telefone.length < 10 || telefone.length > 15) return null;
+  const numero = telefone.length <= 11 ? `55${telefone}` : telefone;
+  const mensagem = `Olá! Estou entrando em contato sobre sua reserva de ${tituloImovel}.`;
+  return `https://wa.me/${numero}?text=${encodeURIComponent(mensagem)}`;
+}
+
+function IconePainel({
+  nome,
+  className = 'h-5 w-5',
+}: {
+  nome: 'chart' | 'calendar' | 'wallet' | 'home' | 'camera' | 'external' | 'edit' | 'whatsapp' | 'plus' | 'sparkles';
+  className?: string;
+}) {
+  const propriedades = {
+    className,
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.8,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+    'aria-hidden': true as const,
+  };
+
+  switch (nome) {
+    case 'chart':
+      return <svg {...propriedades}><path d="M4 19V5M4 19h16M8 15l3-4 3 2 5-7" /></svg>;
+    case 'calendar':
+      return <svg {...propriedades}><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M16 3v4M8 3v4M3 10h18" /></svg>;
+    case 'wallet':
+      return <svg {...propriedades}><rect x="3" y="5" width="18" height="15" rx="2" /><path d="M3 9h18M16 14h2" /></svg>;
+    case 'home':
+      return <svg {...propriedades}><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-6v-7h-4v7H4a1 1 0 0 1-1-1z" /></svg>;
+    case 'camera':
+      return <svg {...propriedades}><path d="M4 7h3l1.5-2h7L17 7h3a1 1 0 0 1 1 1v11H3V8a1 1 0 0 1 1-1Z" /><circle cx="12" cy="13" r="3" /></svg>;
+    case 'external':
+      return <svg {...propriedades}><path d="M14 4h6v6M20 4l-9 9" /><path d="M18 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h5" /></svg>;
+    case 'edit':
+      return <svg {...propriedades}><path d="m14 5 5 5M4 20l4.5-1 10-10a2.1 2.1 0 0 0-3-3l-10 10L4 20Z" /></svg>;
+    case 'whatsapp':
+      return <svg {...propriedades}><path d="M20 11.5a8.4 8.4 0 0 1-12.4 7.4L4 20l1.2-3.5A8.4 8.4 0 1 1 20 11.5Z" /><path d="M9 8.5c.3 2.1 2 3.8 4.1 4.2l1-1 2 1c-.2 1.4-1.2 2.2-2.6 2.1-3.2-.3-6-3.1-6.2-6.3-.1-1.4.7-2.4 2.1-2.6l1 2-1.4.6" /></svg>;
+    case 'plus':
+      return <svg {...propriedades}><path d="M12 5v14M5 12h14" /></svg>;
+    case 'sparkles':
+      return <svg {...propriedades}><path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3ZM19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15Z" /></svg>;
+  }
+}
 
 export default function AreaAnfitriao() {
   const router = useRouter();
   const [userId, setUserId] = useState<string | null>(null);
+  const [nomeAnfitriao, setNomeAnfitriao] = useState('');
+  const [emailAnfitriao, setEmailAnfitriao] = useState('');
   const [urlAirbnb, setUrlAirbnb] = useState('');
   const [textoManual, setTextoManual] = useState('');
   const [mostrarTextoManual, setMostrarTextoManual] = useState(false);
@@ -63,6 +180,26 @@ export default function AreaAnfitriao() {
   const [solicitacaoAtualizacao, setSolicitacaoAtualizacao] = useState(0);
   const [imovelEditando, setImovelEditando] = useState<Imovel | null>(null);
   const [imovelCalendario, setImovelCalendario] = useState<Imovel | null>(null);
+  const [filtroReserva, setFiltroReserva] = useState<FiltroReserva>('todas');
+  const [reservaExpandida, setReservaExpandida] = useState<string | null>(null);
+  const [imoveisAtualizando, setImoveisAtualizando] = useState<Record<string, boolean>>({});
+  const [toast, setToast] = useState<ToastPainel>(null);
+  const [dataReferencia, setDataReferencia] = useState<number | null>(null);
+  const [montado, setMontado] = useState(false);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setMontado(true);
+      setDataReferencia(Date.now());
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, []);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timeout = window.setTimeout(() => setToast(null), 4200);
+    return () => window.clearTimeout(timeout);
+  }, [toast]);
 
   useEffect(() => {
     let ativo = true;
@@ -78,6 +215,14 @@ export default function AreaAnfitriao() {
         }
 
         setUserId(user.id);
+        const nomeDoPerfil =
+          typeof user.user_metadata?.full_name === 'string'
+            ? user.user_metadata.full_name
+            : typeof user.user_metadata?.name === 'string'
+              ? user.user_metadata.name
+              : '';
+        setEmailAnfitriao(user.email || '');
+        setNomeAnfitriao(nomeDoPerfil || user.email?.split('@')[0] || 'anfitrião');
         const { data: dadosImoveis, error: erroImoveis } = await supabase
           .from('properties')
           .select('*')
@@ -99,7 +244,7 @@ export default function AreaAnfitriao() {
 
         const { data: dadosReservas, error: erroReservas } = await supabase
           .from('bookings')
-          .select('id, property_id, guest_id, check_in, check_out, nights, cleaning_fee, total_price, status')
+          .select('*')
           .in('property_id', listaImoveis.map((imovel) => imovel.id))
           .order('check_in', { ascending: false });
 
@@ -151,8 +296,14 @@ export default function AreaAnfitriao() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('pagamento') === 'retorno') {
-      window.alert('Retorno da assinatura recebido. A ativação será confirmada após validação pelo Mercado Pago.');
+      const timeout = window.setTimeout(() => {
+        setToast({
+          mensagem: 'Retorno da assinatura recebido. A ativação será confirmada após validação pelo Mercado Pago.',
+          tipo: 'info',
+        });
+      }, 0);
       window.history.replaceState({}, '', '/anfitriao');
+      return () => window.clearTimeout(timeout);
     }
   }, []);
 
@@ -161,6 +312,43 @@ export default function AreaAnfitriao() {
     setErroDados('');
     setReservas([]);
     setSolicitacaoAtualizacao((atualizacao) => atualizacao + 1);
+  };
+
+  const salvarImovelConcluido = () => {
+    setToast({ mensagem: 'Alterações do imóvel salvas com sucesso.', tipo: 'sucesso' });
+    recarregarDadosUsuario();
+  };
+
+  const alterarStatusImovel = async (imovel: Imovel) => {
+    if (!userId || ehImovelAdicional(imovel) || imoveisAtualizando[imovel.id]) return;
+
+    const novoStatus = !imovel.is_active;
+    setImoveisAtualizando((atualizando) => ({ ...atualizando, [imovel.id]: true }));
+    try {
+      const { data, error } = await supabase
+        .from('properties')
+        .update({ is_active: novoStatus })
+        .eq('id', imovel.id)
+        .eq('owner_id', userId)
+        .select('id')
+        .maybeSingle();
+
+      if (error) throw error;
+      if (!data) throw new Error('O anúncio não foi encontrado ou não pertence à sua conta.');
+
+      setImoveis((atuais) =>
+        atuais.map((item) => item.id === imovel.id ? { ...item, is_active: novoStatus } : item)
+      );
+      setToast({
+        mensagem: novoStatus ? 'Anúncio ativado.' : 'Anúncio pausado.',
+        tipo: 'sucesso',
+      });
+    } catch (error) {
+      console.error('Erro ao alterar status do imóvel:', error);
+      setToast({ mensagem: 'Não foi possível alterar o status do anúncio. Tente novamente.', tipo: 'erro' });
+    } finally {
+      setImoveisAtualizando((atualizando) => ({ ...atualizando, [imovel.id]: false }));
+    }
   };
 
   const handleImportar = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -196,9 +384,9 @@ export default function AreaAnfitriao() {
       }
 
       if (data.precisaAtivar) {
-        window.alert('Anúncio salvo como rascunho. Assine por R$ 69,96/mês para publicá-lo.');
+        setToast({ mensagem: `Anúncio salvo como rascunho. Assine por ${formatarMoeda(ADDITIONAL_PROPERTY_MONTHLY_PRICE)}/mês para publicá-lo.`, tipo: 'info' });
       } else {
-        window.alert('Seu primeiro imóvel foi cadastrado gratuitamente.');
+        setToast({ mensagem: 'Seu primeiro imóvel foi cadastrado gratuitamente.', tipo: 'sucesso' });
       }
 
       setUrlAirbnb('');
@@ -208,7 +396,7 @@ export default function AreaAnfitriao() {
       recarregarDadosUsuario();
     } catch (error) {
       console.error('Erro ao importar anúncio:', error);
-      window.alert('Erro de conexão ao importar o anúncio.');
+      setToast({ mensagem: 'Erro de conexão ao importar o anúncio.', tipo: 'erro' });
     } finally {
       setCarregandoImportacao(false);
     }
@@ -255,19 +443,103 @@ export default function AreaAnfitriao() {
     };
   }, [reservas]);
 
+  const indicadores = useMemo(() => {
+    if (dataReferencia === null) {
+      return {
+        taxaOcupacao: 0,
+        receitaLiquidaMes: 0,
+        proximoRepasse: 0,
+        dataProximoRepasse: '',
+      };
+    }
+
+    const agora = new Date(dataReferencia);
+    const inicioMes = new Date(agora.getFullYear(), agora.getMonth(), 1);
+    const inicioProximoMes = new Date(agora.getFullYear(), agora.getMonth() + 1, 1);
+    const inicioMesIso = `${inicioMes.getFullYear()}-${String(inicioMes.getMonth() + 1).padStart(2, '0')}-01`;
+    const inicioProximoMesIso = `${inicioProximoMes.getFullYear()}-${String(inicioProximoMes.getMonth() + 1).padStart(2, '0')}-01`;
+    const diasNoMes = new Date(agora.getFullYear(), agora.getMonth() + 1, 0).getDate();
+    const reservasValidas = reservas.filter((reserva) => {
+      const categoria = statusReserva(reserva).categoria;
+      return categoria !== 'bloqueadas' && categoria !== 'canceladas';
+    });
+    const idsImoveisAtivos = new Set(
+      imoveis.filter((imovel) => imovel.is_active).map((imovel) => imovel.id)
+    );
+    const noitesOcupadas = reservasValidas
+      .filter((reserva) => idsImoveisAtivos.has(reserva.property_id))
+      .reduce((total, reserva) => {
+        const inicio = reserva.check_in > inicioMesIso ? reserva.check_in : inicioMesIso;
+        const fim = reserva.check_out < inicioProximoMesIso ? reserva.check_out : inicioProximoMesIso;
+        if (fim <= inicio) return total;
+        return total + Math.max(diasEntreDatas(inicio, fim), 0);
+      }, 0);
+    const noitesDisponiveis = idsImoveisAtivos.size * diasNoMes;
+    const reservasDoMes = reservasValidas.filter(
+      (reserva) => reserva.check_in >= inicioMesIso && reserva.check_in < inicioProximoMesIso
+    );
+    const receitaLiquidaMes = reservasDoMes.reduce((total, reserva) => {
+      const bruto = Number(reserva.total_price) || 0;
+      const diarias = Math.max(bruto - (Number(reserva.cleaning_fee) || 0), 0);
+      return total + bruto - diarias * PLATFORM_COMMISSION_RATE;
+    }, 0);
+    const hojeIso = `${agora.getFullYear()}-${String(agora.getMonth() + 1).padStart(2, '0')}-${String(agora.getDate()).padStart(2, '0')}`;
+    const proximaReserva = reservasValidas
+      .filter(
+        (reserva) =>
+          statusReserva(reserva).categoria === 'confirmadas' && reserva.check_in >= hojeIso
+      )
+      .sort((a, b) => a.check_in.localeCompare(b.check_in))[0];
+    const proximoRepasse = proximaReserva
+      ? (() => {
+          const bruto = Number(proximaReserva.total_price) || 0;
+          const diarias = Math.max(bruto - (Number(proximaReserva.cleaning_fee) || 0), 0);
+          return bruto - diarias * PLATFORM_COMMISSION_RATE;
+        })()
+      : 0;
+
+    return {
+      taxaOcupacao: noitesDisponiveis
+        ? Math.min(Math.round((noitesOcupadas / noitesDisponiveis) * 100), 100)
+        : 0,
+      receitaLiquidaMes,
+      proximoRepasse,
+      dataProximoRepasse: proximaReserva?.check_in || '',
+    };
+  }, [dataReferencia, imoveis, reservas]);
+
   const reservasRecentes = [...reservas]
     .filter((reserva) => reserva.status !== 'blocked')
     .slice(0, 5);
+
+  const reservasFiltradas = reservas
+    .filter((reserva) => statusReserva(reserva).categoria !== 'bloqueadas')
+    .filter((reserva) => filtroReserva === 'todas' || statusReserva(reserva).categoria === filtroReserva);
 
   const renderTabelaReservas = (lista: Reserva[]) => (
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
       {lista.length === 0 ? (
         <div className="px-6 py-12 text-center">
-          <span className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-xl text-slate-500" aria-hidden="true">
-            ▤
+          <span className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-cyan-50 text-[#155E75]" aria-hidden="true">
+            <IconePainel nome="calendar" />
           </span>
-          <h3 className="font-semibold text-slate-900">Nenhuma reserva registrada</h3>
-          <p className="mt-1 text-sm text-slate-500">Quando houver reservas, o extrato aparecerá aqui.</p>
+          <h3 className="font-semibold text-slate-900">
+            {reservas.length === 0 ? 'Sua próxima reserva começa aqui' : 'Nenhuma reserva neste filtro'}
+          </h3>
+          <p className="mt-1 text-sm text-slate-500">
+            {reservas.length === 0
+              ? 'Quando um hóspede reservar seu espaço, os detalhes aparecerão neste extrato.'
+              : 'Tente outra opção para consultar suas reservas.'}
+          </p>
+          {reservas.length === 0 && (
+            <button
+              type="button"
+              onClick={() => setAbaAtiva('imoveis')}
+              className="mt-5 rounded-xl bg-[#155E75] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#104b5e]"
+            >
+              Gerenciar meus imóveis
+            </button>
+          )}
         </div>
       ) : (
         <div className="overflow-x-auto">
@@ -280,7 +552,7 @@ export default function AreaAnfitriao() {
                 <th scope="col" className="px-5 py-4 text-right">Taxa de limpeza</th>
                 <th scope="col" className="px-5 py-4 text-right">Comissão (10%)</th>
                 <th scope="col" className="px-5 py-4 text-right">Repasse líquido</th>
-                <th scope="col" className="px-5 py-4">Pagamento</th>
+                <th scope="col" className="px-5 py-4">Status / detalhes</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -291,36 +563,41 @@ export default function AreaAnfitriao() {
                 const diarias = Math.max(bruto - limpeza, 0);
                 const comissao = diarias * PLATFORM_COMMISSION_RATE;
                 const noites = reserva.nights ?? Math.max(
-                  Math.round(
-                    (new Date(`${reserva.check_out}T12:00:00`).getTime() -
-                      new Date(`${reserva.check_in}T12:00:00`).getTime()) / 86400000
-                  ),
+                  diasEntreDatas(reserva.check_in, reserva.check_out),
                   0
                 );
-                const status = reserva.status?.toLowerCase();
-                const statusPagamento =
-                  status === 'paid' || status === 'approved'
-                    ? 'Confirmado'
-                    : status === 'pending'
-                      ? 'Pendente'
-                      : status === 'blocked'
-                        ? 'Bloqueio'
-                        : 'Não informado';
+                const status = statusReserva(reserva);
+                const statusPagamento = status.rotulo;
                 const statusClass =
-                  statusPagamento === 'Confirmado'
+                  status.categoria === 'confirmadas'
                     ? 'bg-emerald-50 text-emerald-700'
-                    : statusPagamento === 'Pendente'
+                    : status.categoria === 'pendentes'
                       ? 'bg-amber-50 text-amber-700'
-                      : 'bg-slate-100 text-slate-600';
+                      : status.categoria === 'canceladas'
+                        ? 'bg-rose-50 text-rose-700'
+                        : 'bg-slate-100 text-slate-600';
+                const telefone = linkWhatsApp(reserva, imovel?.title || 'seu imóvel');
+                const expandida = reservaExpandida === reserva.id;
 
                 return (
-                  <tr key={reserva.id} className="align-top text-slate-700">
+                  <Fragment key={reserva.id}>
+                  <tr className="align-top text-slate-700">
                     <td className="px-5 py-4">
-                      <p className="font-semibold text-slate-900">
-                        {reserva.guest_id
-                          ? emailsHospedes[reserva.guest_id] || `Hóspede ${reserva.guest_id.slice(0, 8)}`
-                          : 'Hóspede não identificado'}
-                      </p>
+                      <button
+                        type="button"
+                        aria-expanded={expandida}
+                        onClick={() => setReservaExpandida(expandida ? null : reserva.id)}
+                        className="text-left"
+                      >
+                        <span className="block font-semibold text-slate-900">
+                          {reserva.guest_id
+                            ? emailsHospedes[reserva.guest_id] || `Hóspede ${reserva.guest_id.slice(0, 8)}`
+                            : 'Hóspede não identificado'}
+                        </span>
+                        <span className="mt-1 block text-xs font-medium text-[#155E75]">
+                          {expandida ? 'Ocultar detalhes' : 'Ver detalhes'}
+                        </span>
+                      </button>
                       <p className="mt-1 max-w-[220px] truncate text-xs text-slate-500">
                         {imovel?.title || 'Imóvel indisponível'}
                       </p>
@@ -344,6 +621,35 @@ export default function AreaAnfitriao() {
                       </span>
                     </td>
                   </tr>
+                  {expandida && (
+                    <tr key={`${reserva.id}-detalhes`} className="bg-slate-50/80">
+                      <td colSpan={7} className="px-5 py-5">
+                        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">Detalhes da reserva</p>
+                            <p className="mt-1 text-xs leading-5 text-slate-600">
+                              {noites} {noites === 1 ? 'diária' : 'diárias'} · {formatarData(reserva.check_in)} a {formatarData(reserva.check_out)}
+                              {' · '}Limpeza repassada integralmente ({formatarMoeda(limpeza)}); comissão de 10% somente sobre diárias ({formatarMoeda(comissao)}).
+                            </p>
+                          </div>
+                          {telefone ? (
+                            <a
+                              href={telefone}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-emerald-700"
+                            >
+                              <IconePainel nome="whatsapp" className="h-4 w-4" />
+                              Contatar hóspede
+                            </a>
+                          ) : (
+                            <span className="text-xs text-slate-500">Telefone não informado nesta reserva.</span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 );
               })}
             </tbody>
@@ -469,17 +775,34 @@ export default function AreaAnfitriao() {
               Painel do anfitrião
             </p>
             <h1 className="text-3xl font-bold tracking-tight text-slate-950 sm:text-4xl">
-              Olá, anfitrião
+              Olá, {montado && nomeAnfitriao ? nomeAnfitriao : 'anfitrião'}
             </h1>
             <p className="mt-2 text-sm text-slate-500">
               Gerencie seus anúncios, acompanhe reservas e veja seus repasses.
             </p>
+            <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+              {montado && emailAnfitriao && <span>{emailAnfitriao}</span>}
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 font-medium text-emerald-700">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                {montado && userId ? 'Conta conectada' : 'Verificando conta'}
+              </span>
+            </div>
           </div>
-          <p className="text-sm text-slate-500">
-            <span className="font-semibold text-slate-900">{carregandoDados ? '—' : imoveisAtivos.length}</span> imóvel(is) ativo(s)
-            <span className="mx-1.5 text-slate-300">/</span>
-            {carregandoDados ? '—' : imoveis.length} anúncio(s)
-          </p>
+          <div className="flex flex-col items-start gap-3 sm:items-end">
+            <button
+              type="button"
+              onClick={() => setAbaAtiva('imoveis')}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#E87722] px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-[#d16617] focus:outline-none focus:ring-2 focus:ring-[#E87722]/30 focus:ring-offset-2"
+            >
+              <IconePainel nome="plus" className="h-4 w-4" />
+              Novo Imóvel
+            </button>
+            <p className="text-xs text-slate-500">
+              <span className="font-semibold text-slate-900">{!montado || carregandoDados ? '—' : imoveisAtivos.length}</span> ativo(s)
+              <span className="mx-1.5 text-slate-300">/</span>
+              {!montado || carregandoDados ? '—' : imoveis.length} anúncio(s)
+            </p>
+          </div>
         </section>
 
         <nav className="-mx-4 mb-8 overflow-x-auto border-b border-slate-200 px-4 sm:mx-0 sm:px-0" aria-label="Seções do painel">
@@ -522,65 +845,89 @@ export default function AreaAnfitriao() {
               <div className="mb-4 flex flex-wrap items-end justify-between gap-2">
                 <div>
                   <h2 id="resumo-financeiro-titulo" className="text-lg font-bold text-slate-900">
-                    Resumo financeiro
+                    Indicadores do anfitrião
                   </h2>
                   <p className="mt-1 text-sm text-slate-500">
-                    Valores acumulados das reservas, sem bloqueios de calendário.
+                    Acompanhe ocupação, receitas e operação dos seus espaços.
                   </p>
                 </div>
-                <span className="text-xs text-slate-500">Comissão de 10% somente sobre as diárias</span>
+                <span className="text-xs text-slate-500">Limpeza integral para você · comissão de 10% sobre diárias</span>
               </div>
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                {[
+                {([
                   {
-                    label: 'Receita bruta total',
-                    value: resumoFinanceiro.totalBruto,
-                    detail: 'Diárias + taxa de limpeza',
+                    label: 'Taxa de ocupação',
+                    value: `${indicadores.taxaOcupacao}%`,
+                    detail: 'Noites reservadas neste mês',
+                    icon: 'chart',
+                    tone: 'bg-cyan-50 text-cyan-700',
+                  },
+                  {
+                    label: 'Próximo repasse previsto',
+                    value: formatarMoeda(indicadores.proximoRepasse),
+                    detail: indicadores.dataProximoRepasse
+                      ? `Estimativa · check-in em ${formatarData(indicadores.dataProximoRepasse)}`
+                      : 'Sem reservas futuras confirmadas',
+                    icon: 'wallet',
                     tone: 'bg-emerald-50 text-emerald-700',
-                    icon: '↑',
                   },
                   {
-                    label: 'Taxa de limpeza',
-                    value: resumoFinanceiro.taxaLimpeza,
-                    detail: 'Repasse integral ao anfitrião',
-                    tone: 'bg-sky-50 text-sky-700',
-                    icon: '✓',
+                    label: 'Receita líquida no mês',
+                    value: formatarMoeda(indicadores.receitaLiquidaMes),
+                    detail: 'Check-ins neste mês · líquido após comissão e limpeza',
+                    icon: 'calendar',
+                    tone: 'bg-violet-50 text-violet-700',
                   },
                   {
-                    label: 'Comissão da plataforma',
-                    value: resumoFinanceiro.comissao,
-                    detail: '10% apenas sobre as diárias',
+                    label: 'Imóveis ativos',
+                    value: String(imoveisAtivos.length),
+                    detail: `${imoveis.length} anúncio(s) no total`,
+                    icon: 'home',
                     tone: 'bg-amber-50 text-amber-700',
-                    icon: '10%',
                   },
-                  {
-                    label: 'Repasse líquido ao anfitrião',
-                    value: resumoFinanceiro.repasse,
-                    detail: 'Limpeza integral + diárias após comissão',
-                    tone: 'bg-cyan-50 text-cyan-800',
-                    icon: '→',
-                  },
-                ].map((kpi) => (
-                  <article key={kpi.label} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                    <div className="mb-5 flex items-center justify-between">
+                ] as const).map((kpi) => (
+                  <article key={kpi.label} className="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-sm transition hover:shadow-md">
+                    <div className="mb-5 flex items-center justify-between gap-3">
                       <span className="text-sm font-medium text-slate-500">{kpi.label}</span>
-                      <span className={`flex h-9 min-w-9 items-center justify-center rounded-xl px-2 text-sm font-bold ${kpi.tone}`} aria-hidden="true">
-                        {kpi.icon}
+                      <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${kpi.tone}`}>
+                        <IconePainel nome={kpi.icon} />
                       </span>
                     </div>
                     {carregandoDados ? (
                       <div className="h-8 w-36 animate-pulse rounded-lg bg-slate-100" />
                     ) : (
-                      <p className="text-2xl font-bold tracking-tight text-slate-950">{formatarMoeda(kpi.value)}</p>
+                      <p className="text-2xl font-bold tracking-tight text-slate-950">{kpi.value}</p>
                     )}
                     <p className="mt-2 text-xs text-slate-500">{kpi.detail}</p>
                   </article>
                 ))}
               </div>
               <p className="mt-3 text-xs leading-relaxed text-slate-500">
-                A limpeza entra na receita bruta e é repassada 100% ao anfitrião, sem desconto de comissão.
+                Repasse apresentado como estimativa com base nas próximas reservas confirmadas; o prazo operacional pode variar. A taxa de limpeza é 100% sua, sem comissão.
               </p>
+
+              <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="mb-4">
+                  <h3 className="font-semibold text-slate-900">Resumo financeiro acumulado</h3>
+                  <p className="mt-1 text-xs text-slate-500">Valores registrados nas reservas, excluindo bloqueios de calendário.</p>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                  {[
+                    ['Receita bruta', resumoFinanceiro.totalBruto],
+                    ['Taxa de limpeza', resumoFinanceiro.taxaLimpeza],
+                    ['Comissão (10% das diárias)', resumoFinanceiro.comissao],
+                    ['Repasse líquido', resumoFinanceiro.repasse],
+                  ].map(([label, valor]) => (
+                    <div key={label} className="rounded-xl bg-slate-50 px-4 py-3">
+                      <p className="text-xs text-slate-500">{label}</p>
+                      <p className="mt-1 font-semibold text-slate-900">
+                        {carregandoDados ? '—' : formatarMoeda(Number(valor))}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </section>
 
             {renderPlano()}
@@ -685,11 +1032,20 @@ export default function AreaAnfitriao() {
                 </div>
               ) : imoveis.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-12 text-center">
-                  <span className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-xl" aria-hidden="true">+</span>
+                  <span className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-cyan-50 text-[#155E75]" aria-hidden="true">
+                    <IconePainel nome="home" />
+                  </span>
                   <h3 className="font-semibold text-slate-900">Seu primeiro espaço começa aqui</h3>
                   <p className="mx-auto mt-2 max-w-md text-sm text-slate-500">
                     Importe um anúncio para começar. Seu primeiro imóvel é gratuito.
                   </p>
+                  <a
+                    href="#importar-imovel"
+                    className="mt-5 inline-flex items-center gap-2 rounded-xl bg-[#155E75] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#104b5e]"
+                  >
+                    <IconePainel nome="plus" className="h-4 w-4" />
+                    Adicionar primeiro imóvel
+                  </a>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
@@ -700,6 +1056,11 @@ export default function AreaAnfitriao() {
                     };
                     const limpeza = Number(imovel.cleaning_fee) || 0;
                     const adicional = ehImovelAdicional(imovel);
+                    const quantidadeFotos = Array.isArray(imovel.images)
+                      ? imovel.images.filter((foto): foto is string => typeof foto === 'string').length
+                      : 0;
+                    const totalFotos = quantidadeFotos || (imovel.image_url ? 1 : 0);
+                    const statusAtualizando = !!imoveisAtualizando[imovel.id];
 
                     return (
                       <article key={imovel.id} className="group overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
@@ -714,11 +1075,39 @@ export default function AreaAnfitriao() {
                           }`}>
                             {adicional ? `Plano adicional · ${formatarMoeda(ADDITIONAL_PROPERTY_MONTHLY_PRICE)}/mês` : 'Imóvel gratuito'}
                           </span>
+                          <span className="absolute bottom-3 left-3 inline-flex items-center gap-1.5 rounded-full bg-slate-950/70 px-2.5 py-1.5 text-xs font-medium text-white backdrop-blur-sm">
+                            <IconePainel nome="camera" className="h-3.5 w-3.5" />
+                            {totalFotos} {totalFotos === 1 ? 'foto' : 'fotos'}
+                          </span>
                         </div>
 
                         <div className="p-5">
                           <p className="mb-1 text-xs font-medium text-slate-500">{imovel.location}</p>
                           <h3 className="line-clamp-1 text-base font-bold text-slate-900">{imovel.title}</h3>
+                          <div className="mt-4 flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-3.5 py-3">
+                            <div>
+                              <p className="text-xs font-semibold text-slate-800">Publicação</p>
+                              <p className="mt-0.5 text-[11px] text-slate-500">
+                                {adicional ? 'Gerenciada pela assinatura' : imovel.is_active ? 'Visível para hóspedes' : 'Pausado para hóspedes'}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={imovel.is_active}
+                              aria-label={`${imovel.is_active ? 'Pausar' : 'Ativar'} anúncio ${imovel.title}`}
+                              title={adicional ? 'A ativação de imóveis adicionais é feita pela assinatura.' : undefined}
+                              disabled={adicional || statusAtualizando}
+                              onClick={() => void alterarStatusImovel(imovel)}
+                              className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition focus:outline-none focus:ring-2 focus:ring-[#155E75]/30 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 ${
+                                imovel.is_active ? 'bg-emerald-600' : 'bg-slate-300'
+                              }`}
+                            >
+                              <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${
+                                imovel.is_active ? 'translate-x-5' : 'translate-x-0.5'
+                              }`} />
+                            </button>
+                          </div>
                           <div className="mt-4 grid grid-cols-2 gap-3 rounded-xl bg-slate-50 p-3">
                             <div>
                               <span className="block text-[11px] text-slate-500">Diária</span>
@@ -743,10 +1132,20 @@ export default function AreaAnfitriao() {
                             <button
                               type="button"
                               onClick={() => setImovelEditando(imovel)}
-                              className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-[#155E75] hover:bg-slate-50"
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-[#155E75] hover:bg-slate-50"
                             >
+                              <IconePainel nome="edit" className="h-3.5 w-3.5" />
                               Editar anúncio
                             </button>
+                            <a
+                              href={`/imovel/${imovel.id}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-[#155E75] hover:bg-slate-50"
+                            >
+                              <IconePainel nome="external" className="h-3.5 w-3.5" />
+                              Ver como hóspede
+                            </a>
                             {adicional && !imovel.is_active && <BotaoAtivarImovel imovel={imovel} />}
                           </div>
                         </div>
@@ -768,11 +1167,39 @@ export default function AreaAnfitriao() {
                 Comissão de 10% sobre diárias; a taxa de limpeza é repassada integralmente.
               </p>
             </div>
+            <div className="mb-4 flex flex-wrap gap-2" role="group" aria-label="Filtrar reservas por status">
+              {([
+                ['todas', 'Todas'],
+                ['confirmadas', 'Confirmadas'],
+                ['pendentes', 'Pendentes'],
+                ['canceladas', 'Canceladas'],
+              ] as const).map(([filtro, label]) => {
+                const quantidade = filtro === 'todas'
+                  ? reservas.filter((reserva) => statusReserva(reserva).categoria !== 'bloqueadas').length
+                  : reservas.filter((reserva) => statusReserva(reserva).categoria === filtro).length;
+                const selecionado = filtroReserva === filtro;
+                return (
+                  <button
+                    key={filtro}
+                    type="button"
+                    aria-pressed={selecionado}
+                    onClick={() => setFiltroReserva(filtro)}
+                    className={`rounded-full border px-4 py-2 text-xs font-semibold transition ${
+                      selecionado
+                        ? 'border-[#155E75] bg-[#155E75] text-white shadow-sm'
+                        : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50'
+                    }`}
+                  >
+                    {label} <span className={selecionado ? 'text-white/75' : 'text-slate-400'}>{quantidade}</span>
+                  </button>
+                );
+              })}
+            </div>
             {carregandoDados ? (
               <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-5" role="status" aria-label="Carregando extrato">
                 {[0, 1, 2, 3].map((item) => <div key={item} className="h-12 animate-pulse rounded-lg bg-slate-100" />)}
               </div>
-            ) : renderTabelaReservas(reservas.filter((reserva) => reserva.status !== 'blocked'))}
+            ) : renderTabelaReservas(reservasFiltradas)}
           </section>
         )}
 
@@ -791,11 +1218,38 @@ export default function AreaAnfitriao() {
         )}
       </main>
 
+      {toast && (
+        <div
+          role={toast.tipo === 'erro' ? 'alert' : 'status'}
+          aria-live={toast.tipo === 'erro' ? 'assertive' : 'polite'}
+          className={`fixed bottom-5 right-5 z-[60] flex max-w-[calc(100vw-2.5rem)] items-center gap-3 rounded-2xl border px-4 py-3 text-sm shadow-lg ${
+            toast.tipo === 'erro'
+              ? 'border-rose-200 bg-white text-rose-800'
+              : toast.tipo === 'info'
+                ? 'border-cyan-200 bg-white text-cyan-900'
+                : 'border-emerald-200 bg-white text-emerald-800'
+          }`}
+        >
+          <span className={`h-2 w-2 shrink-0 rounded-full ${
+            toast.tipo === 'erro' ? 'bg-rose-500' : toast.tipo === 'info' ? 'bg-cyan-500' : 'bg-emerald-500'
+          }`} />
+          <span>{toast.mensagem}</span>
+          <button
+            type="button"
+            aria-label="Fechar notificação"
+            onClick={() => setToast(null)}
+            className="ml-1 rounded-full px-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       {imovelEditando && (
         <ModalEditarImovel
           imovel={imovelEditando}
           onClose={() => setImovelEditando(null)}
-          onSalvo={recarregarDadosUsuario}
+          onSalvo={salvarImovelConcluido}
         />
       )}
       {imovelCalendario && (
