@@ -25,6 +25,8 @@ type Imovel = {
   created_at?: string | null;
   images?: unknown;
   image_url?: string | null;
+  external_ical_url?: string | null;
+  ical_last_synced_at?: string | null;
 };
 
 type Reserva = {
@@ -1250,6 +1252,7 @@ export default function AreaAnfitriao() {
           imovel={imovelEditando}
           onClose={() => setImovelEditando(null)}
           onSalvo={salvarImovelConcluido}
+          onIcalSincronizado={recarregarDadosUsuario}
         />
       )}
       {imovelCalendario && (

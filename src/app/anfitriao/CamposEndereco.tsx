@@ -1,32 +1,55 @@
 'use client';
+
 import { useState } from 'react';
 
-export default function CamposEndereco({ form, setForm }: any) {
+type Endereco = {
+  cep: string;
+  street: string;
+  street_number: string;
+  neighborhood: string;
+  city: string;
+  state: string;
+};
+
+type Props = {
+  form: Endereco;
+  onChange: (alteracoes: Partial<Endereco>) => void;
+};
+
+type RespostaViaCep = {
+  erro?: boolean;
+  logradouro?: string;
+  bairro?: string;
+  localidade?: string;
+  uf?: string;
+};
+
+export default function CamposEndereco({ form, onChange }: Props) {
   const [buscandoCep, setBuscandoCep] = useState(false);
 
   const handleBuscaCep = async (valor: string) => {
     const cepLimpo = valor.replace(/\D/g, '').slice(0, 8);
-    setForm((prev: any) => ({ ...prev, cep: cepLimpo }));
+    onChange({ cep: cepLimpo });
 
     if (cepLimpo.length === 8) {
       setBuscandoCep(true);
       try {
-        const res = await fetch(`https://viacep.com.br{cepLimpo}/json/`);
-        const data = await res.json();
-        if (!data.erro) {
-          setForm((prev: any) => ({
-            ...prev,
-            street: data.logradouro || prev.street,
-            neighborhood: data.bairro || prev.neighborhood,
-            city: data.localidade || prev.city,
-            state: data.uf || prev.state,
-            location: `${data.localidade}, ${data.uf}`,
-          }));
-        } else {
-          alert('CEP não encontrado.');
+        const resposta = await fetch(`https://viacep.com.br/ws/${cepLimpo}/json/`);
+        if (!resposta.ok) throw new Error('O serviço de CEP está indisponível.');
+        const dados = (await resposta.json()) as RespostaViaCep;
+        if (dados.erro) {
+          window.alert('CEP não encontrado.');
+          return;
         }
-      } catch {
-        alert('Erro ao consultar o CEP.');
+        onChange({
+          street: dados.logradouro || form.street,
+          neighborhood: dados.bairro || form.neighborhood,
+          city: dados.localidade || form.city,
+          state: dados.uf || form.state,
+        });
+      } catch (error) {
+        console.error('Erro ao consultar CEP:', error);
+        window.alert(error instanceof Error ? error.message : 'Erro ao consultar o CEP.');
       } finally {
         setBuscandoCep(false);
       }
@@ -34,74 +57,68 @@ export default function CamposEndereco({ form, setForm }: any) {
   };
 
   return (
-    <div className="border-t border-gray-200 pt-5 space-y-4">
-      <h4 className="text-sm font-bold text-gray-900">2. Endereço Completo (Para o Mapa)</h4>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <div>
-          <label className="block text-xs font-semibold text-gray-700 mb-1">CEP (Obrigatório) *</label>
+          <label className="mb-1 block text-xs font-semibold text-gray-700">CEP</label>
           <input
             type="text"
-            required
-            maxLength={8}
+            inputMode="numeric"
+            maxLength={9}
             value={form.cep}
-            onChange={(e) => handleBuscaCep(e.target.value)}
-            placeholder="00000000"
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm"
+            onChange={(evento) => void handleBuscaCep(evento.target.value)}
+            placeholder="00000-000"
+            className="w-full rounded-xl border border-gray-300 px-3.5 py-2.5 text-sm"
           />
           {buscandoCep && <span className="text-[11px] text-[#E87722]">Buscando CEP...</span>}
         </div>
         <div className="sm:col-span-2">
-          <label className="block text-xs font-semibold text-gray-700 mb-1">Rua / Logradouro *</label>
+          <label className="mb-1 block text-xs font-semibold text-gray-700">Rua / Logradouro</label>
           <input
             type="text"
-            required
             value={form.street}
-            onChange={(e) => setForm({ ...form, street: e.target.value })}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm"
+            onChange={(evento) => onChange({ street: evento.target.value })}
+            className="w-full rounded-xl border border-gray-300 px-3.5 py-2.5 text-sm"
           />
         </div>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <div>
-          <label className="block text-xs font-semibold text-gray-700 mb-1">Número *</label>
+          <label className="mb-1 block text-xs font-semibold text-gray-700">Número</label>
           <input
             type="text"
-            required
             value={form.street_number}
-            onChange={(e) => setForm({ ...form, street_number: e.target.value })}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm"
+            onChange={(evento) => onChange({ street_number: evento.target.value })}
+            className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm"
           />
         </div>
         <div>
-          <label className="block text-xs font-semibold text-gray-700 mb-1">Bairro *</label>
+          <label className="mb-1 block text-xs font-semibold text-gray-700">Bairro</label>
           <input
             type="text"
-            required
             value={form.neighborhood}
-            onChange={(e) => setForm({ ...form, neighborhood: e.target.value })}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm"
+            onChange={(evento) => onChange({ neighborhood: evento.target.value })}
+            className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm"
           />
         </div>
         <div>
-          <label className="block text-xs font-semibold text-gray-700 mb-1">Cidade *</label>
+          <label className="mb-1 block text-xs font-semibold text-gray-700">Cidade *</label>
           <input
             type="text"
-            required
             value={form.city}
-            onChange={(e) => setForm({ ...form, city: e.target.value })}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm"
+            onChange={(evento) => onChange({ city: evento.target.value })}
+            className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm"
           />
         </div>
         <div>
-          <label className="block text-xs font-semibold text-gray-700 mb-1">UF *</label>
+          <label className="mb-1 block text-xs font-semibold text-gray-700">UF</label>
           <input
             type="text"
-            required
             maxLength={2}
             value={form.state}
-            onChange={(e) => setForm({ ...form, state: e.target.value.toUpperCase() })}
-            className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm"
+            onChange={(evento) => onChange({ state: evento.target.value.toUpperCase() })}
+            className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm"
           />
         </div>
       </div>

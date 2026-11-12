@@ -124,7 +124,7 @@ export default function ModalCalendarioProprietario({ imovel, userId, onClose }:
           </div>
         )}
 
-        <PainelIcal imovel={imovel} userId={userId} onSincronizado={carregarReservas} />
+        <PainelIcal imovel={imovel} onSincronizado={carregarReservas} />
 
         <div className="border-t pt-3 mt-4">
           <h4 className="text-xs font-bold uppercase text-gray-500 mb-2">Histórico ({reservas.length})</h4>

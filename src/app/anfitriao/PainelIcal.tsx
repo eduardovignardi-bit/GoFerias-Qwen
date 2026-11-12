@@ -1,37 +1,52 @@
 'use client';
-import { useState } from 'react';
+import { useState, type FormEvent } from 'react';
+import { supabase } from '@/lib/supabase';
 
-export default function PainelIcal({ imovel, userId, onSincronizado }: any) {
+type Props = {
+  imovel: { id: string; external_ical_url?: string | null };
+  onSincronizado: () => void;
+};
+
+export default function PainelIcal({ imovel, onSincronizado }: Props) {
   const [icalExterno, setIcalExterno] = useState(imovel.external_ical_url || '');
   const [sincronizando, setSincronizando] = useState(false);
+  const [mensagem, setMensagem] = useState('');
+  const [erro, setErro] = useState('');
 
   const linkExportacao =
     typeof window !== 'undefined'
       ? `${window.location.origin}/api/ical/${imovel.id}`
       : `/api/ical/${imovel.id}`;
 
-  const handleSincronizar = async (e: React.FormEvent) => {
+  const handleSincronizar = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    setErro('');
+    setMensagem('');
     setSincronizando(true);
     try {
+      const { data: { session }, error: erroSessao } = await supabase.auth.getSession();
+      if (erroSessao) throw erroSessao;
+      if (!session) throw new Error('Entre na sua conta para sincronizar o calendário.');
       const res = await fetch('/api/ical/sync', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer '.concat(session.access_token),
+        },
         body: JSON.stringify({
           propertyId: imovel.id,
-          userId,
           icalUrl: icalExterno,
         }),
       });
       const data = await res.json();
       if (!res.ok) {
-        alert(data.error || 'Erro ao sincronizar.');
-        return;
+        throw new Error(data.error || 'Erro ao sincronizar.');
       }
-      alert(`Sincronização concluída! ${data.importados} bloqueio(s) importado(s).`);
+      setMensagem(`Sincronização concluída! ${data.importados} bloqueio(s) importado(s).`);
       onSincronizado();
-    } catch {
-      alert('Erro de rede ao sincronizar iCal.');
+    } catch (error) {
+      console.error('Erro ao sincronizar calendário iCal:', error);
+      setErro(error instanceof Error ? error.message : 'Erro de rede ao sincronizar iCal.');
     } finally {
       setSincronizando(false);
     }
@@ -85,6 +100,8 @@ export default function PainelIcal({ imovel, userId, onSincronizado }: any) {
           </button>
         </div>
       </form>
+      {mensagem && <p role="status" className="text-xs text-emerald-700">{mensagem}</p>}
+      {erro && <p role="alert" className="text-xs text-rose-700">{erro}</p>}
     </div>
   );
 }
