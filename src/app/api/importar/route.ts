@@ -17,16 +17,16 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Sessão inválida. Entre novamente.' }, { status: 401 });
     }
 
-    // 1. Verifica quantos imóveis este proprietário já possui
-    const { count, error: countError } = await supabaseAutenticado
+    // A vaga gratuita depende dos anúncios ativos, não do histórico de cadastros.
+    const { data: imoveisAtivos, error: erroImoveisAtivos } = await supabaseAutenticado
       .from('properties')
-      .select('*', { count: 'exact', head: true })
-      .eq('owner_id', user.id);
+      .select('id')
+      .eq('owner_id', user.id)
+      .eq('is_active', true);
 
-    if (countError) throw countError;
+    if (erroImoveisAtivos) throw erroImoveisAtivos;
 
-    const totalImoveis = count || 0;
-    const isPrimeiroGratuito = totalImoveis === 0;
+    const vagaGratuitaDisponivel = (imoveisAtivos || []).length === 0;
 
     // 2. Extração Real: Tenta capturar metadados e JSON-LD direto do Airbnb
     let fotoCapa = '';
@@ -129,8 +129,8 @@ export async function POST(request: Request) {
           price_per_night: dadosImovel.preco_noite || 350,
           airbnb_url: url,
           image_url: fotoCapa,
-          is_paid_slot: !isPrimeiroGratuito,
-          is_active: isPrimeiroGratuito,
+          is_paid_slot: !vagaGratuitaDisponivel,
+          is_active: vagaGratuitaDisponivel,
         },
       ])
       .select()
@@ -141,7 +141,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       sucesso: true,
       imovel: novoImovel,
-      precisaAtivar: !isPrimeiroGratuito,
+      precisaAtivar: !vagaGratuitaDisponivel,
     });
   } catch (error: unknown) {
     console.error('Erro na importação:', error);

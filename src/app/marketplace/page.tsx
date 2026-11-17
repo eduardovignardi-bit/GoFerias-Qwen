@@ -79,6 +79,13 @@ export default function Marketplace() {
   const [carregando, setCarregando] = useState(true);
   const [erroMapa, setErroMapa] = useState('');
   const requisicaoMapa = useRef(0);
+  const [emailUsuario, setEmailUsuario] = useState<string | null>(null);
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => {
+      setEmailUsuario(data.user?.email ?? null);
+    });
+  }, []);
 
   useEffect(() => {
     let ativo = true;
@@ -216,6 +223,16 @@ export default function Marketplace() {
             <Link href="/viagens" className="rounded-full px-2.5 py-2 text-xs font-semibold text-gray-800 transition hover:bg-gray-100 sm:px-3.5 sm:text-sm">
               Minhas Viagens
             </Link>
+              {emailUsuario &&
+              emailUsuario.toLowerCase() === process.env.NEXT_PUBLIC_ADMIN_EMAIL?.toLowerCase() && (
+              <a
+                href="/admin/importar"
+                className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-slate-800"
+      >
+              Admin
+              </a>
+              )}
+
             <Link href="/anfitriao" className="rounded-full px-2.5 py-2 text-xs font-semibold text-[#155E75] transition hover:bg-gray-100 sm:px-3.5 sm:text-sm">
               Anuncie seu espaço
             </Link>

@@ -7,6 +7,7 @@ import { supabase } from '@/lib/supabase';
 import {
   ADDITIONAL_PROPERTY_MONTHLY_PRICE,
   PLATFORM_COMMISSION_RATE,
+  quantidadeImoveisAdicionaisCobrados,
 } from '@/lib/billing';
 import ModalEditarImovel from './ModalEditarImovel';
 import ModalCalendarioProprietario from './ModalCalendarioProprietario';
@@ -181,11 +182,13 @@ export default function AreaAnfitriao() {
   const [erroDados, setErroDados] = useState('');
   const [solicitacaoAtualizacao, setSolicitacaoAtualizacao] = useState(0);
   const [imovelEditando, setImovelEditando] = useState<Imovel | null>(null);
+  const [criandoImovel, setCriandoImovel] = useState(false);
   const [imovelCalendario, setImovelCalendario] = useState<Imovel | null>(null);
   const [filtroReserva, setFiltroReserva] = useState<FiltroReserva>('todas');
   const [reservaExpandida, setReservaExpandida] = useState<string | null>(null);
   const [imoveisAtualizando, setImoveisAtualizando] = useState<Record<string, boolean>>({});
   const [toast, setToast] = useState<ToastPainel>(null);
+  const [respondendoId, setRespondendoId] = useState<string | null>(null);
   const [dataReferencia, setDataReferencia] = useState<number | null>(null);
   const [montado, setMontado] = useState(false);
 
@@ -320,16 +323,74 @@ export default function AreaAnfitriao() {
     setToast({ mensagem: 'Alterações do imóvel salvas com sucesso.', tipo: 'sucesso' });
     recarregarDadosUsuario();
   };
+  const responderSolicitacaoReserva = async (reservaId: string, decisao: 'approved' | 'cancelled') => {
+    if (respondendoId) return;
+    setRespondendoId(reservaId);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        setToast({ mensagem: 'Sua sessão expirou. Entre novamente.', tipo: 'erro' });
+        return;
+      }
+
+      const resp = await fetch('/api/anfitriao/responder-reserva', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ reservaId, decisao }),
+      });
+
+      const dados = await resp.json();
+      if (!resp.ok) {
+        throw new Error(dados.error || 'Falha ao atualizar solicitação no banco.');
+      }
+
+      setReservas((atuais) =>
+        atuais.map((r) => (r.id === reservaId ? { ...r, status: decisao } : r))
+      );
+
+      setToast({
+        mensagem:
+          decisao === 'approved'
+            ? 'Reserva aprovada! O botão de pagamento já foi liberado na tela do hóspede.'
+            : 'Solicitação de reserva recusada.',
+        tipo: decisao === 'approved' ? 'sucesso' : 'info',
+      });
+    } catch (error) {
+      setToast({
+        mensagem: error instanceof Error ? error.message : 'Erro ao atualizar solicitação.',
+        tipo: 'erro',
+      });
+    } finally {
+      setRespondendoId(null);
+    }
+  };
 
   const alterarStatusImovel = async (imovel: Imovel) => {
-    if (!userId || ehImovelAdicional(imovel) || imoveisAtualizando[imovel.id]) return;
+    if (
+      !userId ||
+      (imovel.is_active && ehImovelAdicional(imovel)) ||
+      imoveisAtualizando[imovel.id]
+    ) return;
 
     const novoStatus = !imovel.is_active;
+    if (novoStatus && imoveisAtivos.length > 0) {
+      setToast({
+        mensagem: 'A vaga gratuita já está em uso. Ative outro imóvel com a assinatura adicional.',
+        tipo: 'info',
+      });
+      return;
+    }
     setImoveisAtualizando((atualizando) => ({ ...atualizando, [imovel.id]: true }));
     try {
       const { data, error } = await supabase
         .from('properties')
-        .update({ is_active: novoStatus })
+        .update({
+          is_active: novoStatus,
+          ...(novoStatus ? { is_paid_slot: false } : {}),
+        })
         .eq('id', imovel.id)
         .eq('owner_id', userId)
         .select('id')
@@ -339,7 +400,11 @@ export default function AreaAnfitriao() {
       if (!data) throw new Error('O anúncio não foi encontrado ou não pertence à sua conta.');
 
       setImoveis((atuais) =>
-        atuais.map((item) => item.id === imovel.id ? { ...item, is_active: novoStatus } : item)
+        atuais.map((item) =>
+          item.id === imovel.id
+            ? { ...item, is_active: novoStatus, ...(novoStatus ? { is_paid_slot: false } : {}) }
+            : item
+        )
       );
       setToast({
         mensagem: novoStatus ? 'Anúncio ativado.' : 'Anúncio pausado.',
@@ -388,7 +453,7 @@ export default function AreaAnfitriao() {
       if (data.precisaAtivar) {
         setToast({ mensagem: `Anúncio salvo como rascunho. Assine por ${formatarMoeda(ADDITIONAL_PROPERTY_MONTHLY_PRICE)}/mês para publicá-lo.`, tipo: 'info' });
       } else {
-        setToast({ mensagem: 'Seu primeiro imóvel foi cadastrado gratuitamente.', tipo: 'sucesso' });
+        setToast({ mensagem: 'Anúncio cadastrado e ativado na vaga gratuita.', tipo: 'sucesso' });
       }
 
       setUrlAirbnb('');
@@ -410,15 +475,21 @@ export default function AreaAnfitriao() {
         .sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''))[0]?.id,
     [imoveis]
   );
-  const ehImovelAdicional = (imovel: Imovel) =>
-    imovel.is_paid_slot ?? imovel.id !== primeiroImovelId;
   const imoveisAtivos = imoveis.filter((imovel) => imovel.is_active);
-  const imoveisAdicionaisAtivos = imoveisAtivos.filter(ehImovelAdicional);
+  const imovelGratuitoAtivoId =
+    imoveisAtivos.find((imovel) => imovel.is_paid_slot === false)?.id ??
+    imoveisAtivos.find((imovel) => imovel.id === primeiroImovelId)?.id ??
+    imoveisAtivos[0]?.id;
+  const ehImovelAdicional = (imovel: Imovel) =>
+    imovel.is_active
+      ? imovel.id !== imovelGratuitoAtivoId
+      : imoveisAtivos.length > 0;
   const imoveisAdicionaisPendentes = imoveis.filter(
-    (imovel) => ehImovelAdicional(imovel) && !imovel.is_active
+    (imovel) => imoveisAtivos.length > 0 && !imovel.is_active
   );
-  const vagasGratuitasUtilizadas = imoveis.some((imovel) => !ehImovelAdicional(imovel)) ? 1 : 0;
-  const mensalidadeAtual = imoveisAdicionaisAtivos.length * ADDITIONAL_PROPERTY_MONTHLY_PRICE;
+  const quantidadeAdicionaisCobrados = quantidadeImoveisAdicionaisCobrados(imoveisAtivos.length);
+  const vagasGratuitasUtilizadas = imoveisAtivos.length > 0 ? 1 : 0;
+  const mensalidadeAtual = quantidadeAdicionaisCobrados * ADDITIONAL_PROPERTY_MONTHLY_PRICE;
 
   const resumoFinanceiro = useMemo(() => {
     const reservasValidas = reservas.filter((reserva) => reserva.status !== 'blocked');
@@ -536,7 +607,10 @@ export default function AreaAnfitriao() {
           {reservas.length === 0 && (
             <button
               type="button"
-              onClick={() => setAbaAtiva('imoveis')}
+            onClick={() => {
+             setAbaAtiva('imoveis');
+             setCriandoImovel(true);
+           }}
               className="mt-5 rounded-xl bg-[#155E75] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#104b5e]"
             >
               Gerenciar meus imóveis
@@ -673,7 +747,7 @@ export default function AreaAnfitriao() {
               Seus espaços, com cobrança transparente
             </h2>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-              O primeiro imóvel é gratuito. Cada imóvel adicional ativo custa{' '}
+              Uma vaga de imóvel ativo é gratuita. Cada imóvel ativo adicional custa{' '}
               {formatarMoeda(ADDITIONAL_PROPERTY_MONTHLY_PRICE)} por mês.
             </p>
           </div>
@@ -704,7 +778,7 @@ export default function AreaAnfitriao() {
           <div className="px-6 py-5">
             <span className="text-xs font-medium text-slate-500">Adicionais cobrados</span>
             <p className="mt-1 text-2xl font-bold text-slate-900">
-              {carregandoDados ? '—' : imoveisAdicionaisAtivos.length}
+              {carregandoDados ? '—' : quantidadeAdicionaisCobrados}
             </p>
           </div>
           <div className="flex items-center px-6 py-5">
@@ -718,7 +792,7 @@ export default function AreaAnfitriao() {
                 onClick={() => setAbaAtiva('imoveis')}
                 className="w-full rounded-xl bg-[#155E75] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#104b5e]"
               >
-                Adicionar imóvel adicional
+                {imoveisAtivos.length === 0 ? 'Ativar imóvel gratuitamente' : 'Adicionar imóvel adicional'}
               </button>
             )}
           </div>
@@ -793,7 +867,8 @@ export default function AreaAnfitriao() {
           <div className="flex flex-col items-start gap-3 sm:items-end">
             <button
               type="button"
-              onClick={() => setAbaAtiva('imoveis')}
+              onClick={() => setCriandoImovel(true)}
+//              onClick={() => setAbaAtiva('imoveis')}
               className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#E87722] px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-[#d16617] focus:outline-none focus:ring-2 focus:ring-[#E87722]/30 focus:ring-offset-2"
             >
               <IconePainel nome="plus" className="h-4 w-4" />
@@ -806,6 +881,49 @@ export default function AreaAnfitriao() {
             </p>
           </div>
         </section>
+        {reservas.filter((r) => r.status === 'pending').length > 0 && (
+          <div className="mb-6 rounded-2xl border-2 border-[#E87722] bg-orange-50 p-5 shadow-sm">
+            <h2 className="mb-3 text-base font-bold text-slate-900">
+              Nova(s) solicitação(ões) de reserva aguardando sua aprovação ({reservas.filter((r) => r.status === 'pending').length})
+            </h2>
+            <div className="space-y-3">
+              {reservas
+                .filter((r) => r.status === 'pending')
+                .map((res) => {
+                  const imv = imoveis.find((i) => i.id === res.property_id);
+                  return (
+                    <div
+                      key={res.id}
+                      className="flex flex-col justify-between gap-4 rounded-xl border border-orange-200 bg-white p-4 sm:flex-row sm:items-center"
+                    >
+                      <div>
+                        <p className="text-sm font-bold text-slate-900">{imv?.title || 'Imóvel'}</p>
+                        <p className="text-xs text-slate-600">
+                          {formatarData(res.check_in)} até {formatarData(res.check_out)} ({res.nights} noite(s)) — Total: {formatarMoeda(Number(res.total_price) || 0)}
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void responderSolicitacaoReserva(res.id, 'cancelled')}
+                          className="rounded-xl border border-slate-300 px-3.5 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100"
+                        >
+                          Recusar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void responderSolicitacaoReserva(res.id, 'approved')}
+                          className="rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-emerald-700"
+                        >
+                          Aprovar e liberar pagamento
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
+        )}
 
         <nav className="-mx-4 mb-8 overflow-x-auto border-b border-slate-200 px-4 sm:mx-0 sm:px-0" aria-label="Seções do painel">
           <div className="flex min-w-max gap-1" role="tablist">
@@ -1039,14 +1157,14 @@ export default function AreaAnfitriao() {
                   </span>
                   <h3 className="font-semibold text-slate-900">Seu primeiro espaço começa aqui</h3>
                   <p className="mx-auto mt-2 max-w-md text-sm text-slate-500">
-                    Importe um anúncio para começar. Seu primeiro imóvel é gratuito.
+                    Importe um anúncio para começar. Uma vaga de imóvel ativo é gratuita.
                   </p>
                   <a
                     href="#importar-imovel"
                     className="mt-5 inline-flex items-center gap-2 rounded-xl bg-[#155E75] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#104b5e]"
                   >
                     <IconePainel nome="plus" className="h-4 w-4" />
-                    Adicionar primeiro imóvel
+                    Adicionar imóvel
                   </a>
                 </div>
               ) : (
@@ -1133,7 +1251,11 @@ export default function AreaAnfitriao() {
                             </button>
                             <button
                               type="button"
-                              onClick={() => setImovelEditando(imovel)}
+                              onClick={(evento) => {
+                                evento.preventDefault();
+                                evento.stopPropagation();
+                                setImovelEditando(imovel);
+                              }}
                               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-[#155E75] hover:bg-slate-50"
                             >
                               <IconePainel nome="edit" className="h-3.5 w-3.5" />
@@ -1211,7 +1333,7 @@ export default function AreaAnfitriao() {
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
               <h2 className="text-lg font-bold text-slate-900">Como funciona a cobrança</h2>
               <div className="mt-4 grid gap-4 text-sm leading-6 text-slate-600 sm:grid-cols-3">
-                <p><strong className="text-slate-900">1º imóvel:</strong> gratuito, sem mensalidade.</p>
+                <p><strong className="text-slate-900">1 imóvel ativo:</strong> gratuito, sem mensalidade.</p>
                 <p><strong className="text-slate-900">Imóveis adicionais:</strong> {formatarMoeda(ADDITIONAL_PROPERTY_MONTHLY_PRICE)} por mês para cada imóvel ativo.</p>
                 <p><strong className="text-slate-900">Ativação:</strong> a publicação do adicional ocorre após autorização da assinatura pelo Mercado Pago.</p>
               </div>
@@ -1246,6 +1368,17 @@ export default function AreaAnfitriao() {
           </button>
         </div>
       )}
+      {criandoImovel && (
+        <ModalEditarImovel
+          imovel={{ id: '' }}
+          onClose={() => setCriandoImovel(false)}
+          onSalvo={() => {
+          setCriandoImovel(false);
+          salvarImovelConcluido();
+       }}
+       onIcalSincronizado={recarregarDadosUsuario}
+        />
+    )}
 
       {imovelEditando && (
         <ModalEditarImovel

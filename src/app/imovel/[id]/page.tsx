@@ -1,5 +1,6 @@
 import { Suspense } from 'react';
 import ConteudoImovel from './ConteudoImovel';
+import ComodidadesImovel, { extrairComodidadesDaDescricao } from './ComodidadesImovel';
 
 type PaginaDetalhesImovelProps = {
   params: Promise<{ id: string }>;

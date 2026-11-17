@@ -1,5 +1,6 @@
 'use client';
 
+import ComodidadesImovel, { extrairComodidadesDaDescricao } from './ComodidadesImovel';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
@@ -268,12 +269,21 @@ export default function ConteudoImovel({ imovelId }: { imovelId: string }) {
               </p>
             </section>
 
-            <section className="border-b border-gray-200 pb-8">
-              <h2 className="mb-3 text-lg font-semibold">Sobre este espaço</h2>
-              <p className="whitespace-pre-line text-[15px] leading-relaxed text-gray-700">
-                {imovel.description}
-              </p>
-            </section>
+            {(() => {
+              const { textoLimpo, comodidadesAtivas } = extrairComodidadesDaDescricao(imovel.description);
+              return (
+                <>
+                  <section className="border-b border-gray-200 pb-8">
+                    <h2 className="mb-3 text-lg font-semibold">Sobre este espaço</h2>
+                    <p className="whitespace-pre-line text-[15px] leading-relaxed text-gray-700">
+                      {textoLimpo}
+                    </p>
+                  </section>
+
+                  <ComodidadesImovel comodidadesAtivas={comodidadesAtivas} />
+                </>
+              );
+            })()}
 
             <section>
               <h2 className="mb-1 text-lg font-semibold">Onde você estará</h2>
@@ -327,4 +337,15 @@ export default function ConteudoImovel({ imovelId }: { imovelId: string }) {
       )}
     </div>
   );
+     <div className="mt-8 border-t border-slate-200 pt-4 text-xs text-slate-500">
+     Você é o proprietário deste imóvel?{' '}
+     <a
+           href={`mailto:contato@goferias.com.br?subject=${encodeURIComponent(`Reivindicar anúncio: ${imovel?.title ?? ''}`)}&body=${encodeURIComponent(`Olá! Sou o proprietário do imóvel "${imovel?.title ?? ''}" (ID: ${imovel?.id ?? ''}) e gostaria de assumir o gerenciamento gratuito no GoFérias.`)}`}
+
+       className="font-semibold text-[#155E75] underline hover:text-[#104b5e]"
+  >
+       Reivindique este anúncio gratuitamente
+     </a>
+   </div>
+
 }

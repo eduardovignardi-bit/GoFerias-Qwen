@@ -1,14 +1,19 @@
 import { NextResponse } from 'next/server';
 import { MercadoPagoConfig, Payment, PreApproval } from 'mercadopago';
+import { createClient } from '@supabase/supabase-js';
 import { ADDITIONAL_PROPERTY_MONTHLY_PRICE } from '@/lib/billing';
-import { supabase } from '@/lib/supabase';
+
+function obterSupabaseAdmin() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+  return createClient(supabaseUrl, serviceRoleKey);
+}
 
 export async function POST(request: Request) {
   try {
     const url = new URL(request.url);
     const body = await request.json().catch(() => ({}));
 
-    // O Mercado Pago envia o ID do pagamento na URL (?data.id=...) ou no corpo (body.data.id)
     const paymentId =
       url.searchParams.get('data.id') ||
       url.searchParams.get('id') ||
@@ -29,59 +34,87 @@ export async function POST(request: Request) {
     }
 
     const client = new MercadoPagoConfig({ accessToken: token });
-    let imovelId: string | undefined;
-    let ativarImovel = false;
+    const supabaseAdmin = obterSupabaseAdmin();
 
+    // 1. NOTIFICAÇÃO DE PAGAMENTO AVULSO (RESERVA OU COBRANÇA ÚNICA)
     if (topic === 'payment') {
       const payment = new Payment(client);
       const dadosPagamento = await payment.get({ id: String(paymentId) });
-      const valorPago = Math.round((Number(dadosPagamento.transaction_amount) || 0) * 100);
-      const valorEsperado = Math.round(ADDITIONAL_PROPERTY_MONTHLY_PRICE * 100);
 
-      if (
-        dadosPagamento.status === 'approved' &&
-        dadosPagamento.currency_id === 'BRL' &&
-        valorPago === valorEsperado &&
-        dadosPagamento.external_reference
-      ) {
-        imovelId = dadosPagamento.external_reference;
-        ativarImovel = true;
+      const referencia = dadosPagamento.external_reference;
+      const statusPgto = dadosPagamento.status;
+      const valorPagoCentavos = Math.round((Number(dadosPagamento.transaction_amount) || 0) * 100);
+
+      if (!referencia || dadosPagamento.currency_id !== 'BRL') {
+        return NextResponse.json({ recebido: true }, { status: 200 });
       }
-    } else {
-      const preApproval = new PreApproval(client);
-      const assinatura = await preApproval.get({ id: String(paymentId) });
-      const valorAssinatura = Math.round(
-        (Number(assinatura.auto_recurring?.transaction_amount) || 0) * 100
-      );
-      const valorEsperado = Math.round(ADDITIONAL_PROPERTY_MONTHLY_PRICE * 100);
 
-      if (
-        ['authorized', 'paused', 'cancelled', 'pending'].includes(assinatura.status || '') &&
-        assinatura.auto_recurring?.currency_id === 'BRL' &&
-        valorAssinatura === valorEsperado &&
-        assinatura.external_reference
-      ) {
-        imovelId = assinatura.external_reference;
-        ativarImovel = assinatura.status === 'authorized';
-      }
-    }
-
-    if (imovelId) {
-      const { data: imovelAtualizado, error } = await supabase
-        .from('properties')
-        .update({ is_active: ativarImovel, is_paid_slot: true })
-        .eq('id', imovelId)
-        .eq('is_paid_slot', true)
-        .select('id')
+      // Verifica se o external_reference é o ID de uma Reserva (tabela bookings)
+      const { data: reserva } = await supabaseAdmin
+        .from('bookings')
+        .select('id, total_price, status')
+        .eq('id', referencia)
         .maybeSingle();
 
-      if (error) throw error;
-      if (!imovelAtualizado) {
-        throw new Error('O imóvel não foi atualizado; verifique sua existência e elegibilidade.');
+      if (reserva) {
+        const valorReservaCentavos = Math.round((Number(reserva.total_price) || 0) * 100);
+
+        if (statusPgto === 'approved' && valorPagoCentavos >= valorReservaCentavos) {
+          const { error: erroReserva } = await supabaseAdmin
+            .from('bookings')
+            .update({ status: 'confirmed' })
+            .eq('id', reserva.id);
+
+          if (erroReserva) throw erroReserva;
+        } else if (['cancelled', 'rejected', 'refunded', 'charged_back'].includes(statusPgto || '')) {
+          await supabaseAdmin
+            .from('bookings')
+            .update({ status: 'cancelled' })
+            .eq('id', reserva.id);
+        }
+
+        return NextResponse.json({ recebido: true, tipo: 'reserva' }, { status: 200 });
       }
+
+      // Se não é reserva, verifica se é pagamento avulso de Assinatura de Imóvel Adicional
+      const valorAssinaturaCentavos = Math.round(ADDITIONAL_PROPERTY_MONTHLY_PRICE * 100);
+      if (statusPgto === 'approved' && valorPagoCentavos === valorAssinaturaCentavos) {
+        const { error: erroImovel } = await supabaseAdmin
+          .from('properties')
+          .update({ is_active: true, is_paid_slot: true })
+          .eq('id', referencia);
+
+        if (erroImovel) throw erroImovel;
+      }
+
+      return NextResponse.json({ recebido: true, tipo: 'pagamento_imovel' }, { status: 200 });
     }
 
-    return NextResponse.json({ recebido: true }, { status: 200 });
+    // 2. NOTIFICAÇÃO DE ASSINATURA RECORRENTE (PREAPPROVAL)
+    const preApproval = new PreApproval(client);
+    const assinatura = await preApproval.get({ id: String(paymentId) });
+    const imovelId = assinatura.external_reference;
+    const valorAssinaturaCentavos = Math.round(
+      (Number(assinatura.auto_recurring?.transaction_amount) || 0) * 100
+    );
+    const valorEsperadoCentavos = Math.round(ADDITIONAL_PROPERTY_MONTHLY_PRICE * 100);
+
+    if (
+      imovelId &&
+      ['authorized', 'paused', 'cancelled', 'pending'].includes(assinatura.status || '') &&
+      assinatura.auto_recurring?.currency_id === 'BRL' &&
+      valorAssinaturaCentavos === valorEsperadoCentavos
+    ) {
+      const ativarImovel = assinatura.status === 'authorized';
+      const { error: erroAssinatura } = await supabaseAdmin
+        .from('properties')
+        .update({ is_active: ativarImovel, is_paid_slot: true })
+        .eq('id', imovelId);
+
+      if (erroAssinatura) throw erroAssinatura;
+    }
+
+    return NextResponse.json({ recebido: true, tipo: 'assinatura' }, { status: 200 });
   } catch (error) {
     console.error('Erro no Webhook Mercado Pago:', error);
     return NextResponse.json({ error: 'Falha ao processar webhook' }, { status: 500 });

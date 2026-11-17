@@ -4,20 +4,30 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 
-type Reserva = {
+type PeriodoOcupado = {
   check_in: string;
   check_out: string;
 };
 
 type ImovelReservavel = {
   id: string;
+  owner_id?: string;
   price_per_night: number | string;
   cleaning_fee?: number | string | null;
+    guests?: number | null;
 };
+
+function obterDataHojeLocal(): string {
+  const agora = new Date();
+  const ano = agora.getFullYear();
+  const mes = String(agora.getMonth() + 1).padStart(2, '0');
+  const dia = String(agora.getDate()).padStart(2, '0');
+  return `${ano}-${mes}-${dia}`;
+}
 
 export default function WidgetReserva({ imovel }: { imovel: ImovelReservavel }) {
   const router = useRouter();
-  const [reservas, setReservas] = useState<Reserva[]>([]);
+  const [periodosOcupados, setPeriodosOcupados] = useState<PeriodoOcupado[]>([]);
   const [carregandoDisponibilidade, setCarregandoDisponibilidade] = useState(true);
   const [imovelCarregadoId, setImovelCarregadoId] = useState<string | null>(null);
   const [tentativaAtualizacao, setTentativaAtualizacao] = useState(0);
@@ -26,21 +36,44 @@ export default function WidgetReserva({ imovel }: { imovel: ImovelReservavel }) 
   const [mesAtual, setMesAtual] = useState(() => new Date());
   const [checkIn, setCheckIn] = useState<string | null>(null);
   const [checkOut, setCheckOut] = useState<string | null>(null);
+  const [hospedes, setHospedes] = useState(1);
   const [reservando, setReservando] = useState(false);
+
+  const hojeStr = obterDataHojeLocal();
+  const maxHospedes = Math.max(1, Number(imovel.guests) || 10);
 
   useEffect(() => {
     let ativo = true;
 
-    const buscarReservas = async () => {
+    const buscarDisponibilidade = async () => {
       try {
-        const { data, error } = await supabase
+        const { data: reservasData, error: erroReservas } = await supabase
           .from('bookings')
-          .select('check_in, check_out')
+          .select('check_in, check_out, status')
           .eq('property_id', imovel.id);
 
-        if (error) throw error;
+        if (erroReservas) throw erroReservas;
+
+        const ativas = (reservasData || [])
+          .filter((r) => r.status !== 'cancelled' && r.status !== 'canceled' && r.status !== 'rejected')
+          .map((r) => ({ check_in: r.check_in, check_out: r.check_out }));
+
+        const bloqueiosExtras: PeriodoOcupado[] = [];
+        const { data: bloqueiosData } = await supabase
+          .from('blocked_dates')
+          .select('start_date, end_date')
+          .eq('property_id', imovel.id);
+
+        if (Array.isArray(bloqueiosData)) {
+          for (const b of bloqueiosData) {
+            if (b.start_date && b.end_date) {
+              bloqueiosExtras.push({ check_in: b.start_date, check_out: b.end_date });
+            }
+          }
+        }
+
         if (!ativo) return;
-        setReservas(data || []);
+        setPeriodosOcupados([...ativas, ...bloqueiosExtras]);
         setErroDisponibilidade('');
         setCheckIn(null);
         setCheckOut(null);
@@ -57,7 +90,7 @@ export default function WidgetReserva({ imovel }: { imovel: ImovelReservavel }) 
       }
     };
 
-    void buscarReservas();
+    void buscarDisponibilidade();
     return () => {
       ativo = false;
     };
@@ -66,7 +99,7 @@ export default function WidgetReserva({ imovel }: { imovel: ImovelReservavel }) 
   const recarregarDisponibilidade = () => {
     setCarregandoDisponibilidade(true);
     setErroDisponibilidade('');
-    setReservas([]);
+    setPeriodosOcupados([]);
     setCheckIn(null);
     setCheckOut(null);
     setMensagem('');
@@ -76,16 +109,20 @@ export default function WidgetReserva({ imovel }: { imovel: ImovelReservavel }) 
   const disponibilidadeCarregando =
     carregandoDisponibilidade || imovelCarregadoId !== imovel.id;
 
+  const isPassado = (dataStr: string) => dataStr < hojeStr;
+
   const isOcupado = (dataStr: string) =>
     imovelCarregadoId === imovel.id &&
-    reservas.some((reserva) => dataStr >= reserva.check_in && dataStr < reserva.check_out);
+    periodosOcupados.some((p) => dataStr >= p.check_in && dataStr < p.check_out);
+
+  const isIndisponivel = (dataStr: string) => isPassado(dataStr) || isOcupado(dataStr);
 
   const temConflito = (inicio: string, fim: string) =>
     imovelCarregadoId === imovel.id &&
-    reservas.some((reserva) => inicio < reserva.check_out && fim > reserva.check_in);
+    periodosOcupados.some((p) => inicio < p.check_out && fim > p.check_in);
 
   const handleDia = (dataStr: string) => {
-    if (disponibilidadeCarregando || erroDisponibilidade || isOcupado(dataStr) || reservando) return;
+    if (disponibilidadeCarregando || erroDisponibilidade || isIndisponivel(dataStr) || reservando) return;
 
     setMensagem('');
     if (!checkIn || checkOut) {
@@ -132,52 +169,105 @@ export default function WidgetReserva({ imovel }: { imovel: ImovelReservavel }) 
   const confirmarReserva = async () => {
     if (!checkIn || !checkOut || noites <= 0 || disponibilidadeCarregando || erroDisponibilidade) return;
 
+    if (checkIn < hojeStr) {
+      setMensagem('A data de check-in não pode estar no passado.');
+      return;
+    }
+
     setReservando(true);
     setMensagem('');
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
-        setMensagem('Faça login para concluir sua reserva.');
+        setMensagem('Faça login para concluir sua solicitação.');
+        router.push(`/?redirect=/imovel/${imovel.id}`);
         return;
       }
 
+      if (imovel.owner_id && user.id === imovel.owner_id) {
+        setMensagem('Você não pode reservar o seu próprio imóvel. Use o painel do anfitrião para bloquear datas.');
+        return;
+      }
+
+      // Garante o registro do hóspede na tabela profiles para evitar erro de chave estrangeira
+      await supabase
+        .from('profiles')
+        .upsert({ id: user.id, email: user.email }, { onConflict: 'id' });
+
+      // Checagem final contra reservas concorrentes
       const { data: conflitos, error: erroConflitos } = await supabase
         .from('bookings')
-        .select('id')
+        .select('id, status')
         .eq('property_id', imovel.id)
         .lt('check_in', checkOut)
         .gt('check_out', checkIn);
 
       if (erroConflitos) throw erroConflitos;
-      if (conflitos?.length) {
+      const conflitosAtivos = (conflitos || []).filter(
+        (c) => c.status !== 'cancelled' && c.status !== 'canceled' && c.status !== 'rejected'
+      );
+
+      if (conflitosAtivos.length > 0) {
         recarregarDisponibilidade();
         setMensagem('Estas datas acabaram de ser ocupadas. Atualizamos o calendário; escolha outro período.');
         return;
       }
 
-      const { error } = await supabase.from('bookings').insert([
-        {
-          property_id: imovel.id,
-          guest_id: user.id,
-          check_in: checkIn,
-          check_out: checkOut,
-          nights: noites,
-          cleaning_fee: limpeza,
-          total_price: total,
-        },
-      ]);
+      // Cria a solicitação de reserva aguardando aprovação do anfitrião
+      const { error } = await supabase
+        .from('bookings')
+        .insert([
+          {
+            property_id: imovel.id,
+            guest_id: user.id,
+            check_in: checkIn,
+            check_out: checkOut,
+            nights: noites,
+            cleaning_fee: limpeza,
+            total_price: total,
+            status: 'pending',
+          },
+        ]);
 
-      if (error) throw error;
-      window.alert(`Reserva confirmada! Total: ${formatarMoeda(total)}`);
-      router.push('/viagens');
+      if (error) {
+        throw new Error(error.message || 'Erro ao solicitar reserva.');
+      }
+
+      // Dispara e-mail para o anfitrião e gera link do WhatsApp
+      const respNotif = await fetch('/api/notificar-reserva', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          propertyId: imovel.id,
+          checkIn,
+          checkOut,
+          nights: noites,
+          total,
+        }),
+      }).catch(() => null);
+
+      const dadosNotif = respNotif && respNotif.ok ? await respNotif.json() : null;
+      const destinoViagens = dadosNotif?.whatsappUrl
+        ? `/viagens?solicitada=1&wa=${encodeURIComponent(dadosNotif.whatsappUrl)}`
+        : '/viagens?solicitada=1';
+
+      router.push(destinoViagens);
     } catch (error) {
-      console.error('Erro ao confirmar reserva:', error);
+      const msg =
+        error && typeof error === 'object' && 'message' in error
+          ? String((error as { message: unknown }).message)
+          : 'Não foi possível concluir a solicitação. Verifique a disponibilidade e tente novamente.';
+      console.error('Erro ao solicitar reserva:', msg, error);
       recarregarDisponibilidade();
-      setMensagem('Não foi possível concluir a reserva. Verifique a disponibilidade e tente novamente.');
+      setMensagem(msg);
     } finally {
       setReservando(false);
     }
   };
+
+  const hoje = new Date();
+  const podeVoltarMes =
+    ano > hoje.getFullYear() || (ano === hoje.getFullYear() && mes > hoje.getMonth());
 
   return (
     <div className="sticky top-28 rounded-2xl border border-gray-200 bg-white p-6 shadow-xl">
@@ -208,8 +298,9 @@ export default function WidgetReserva({ imovel }: { imovel: ImovelReservavel }) 
         <button
           type="button"
           aria-label="Mês anterior"
+          disabled={!podeVoltarMes}
           onClick={() => setMesAtual(new Date(ano, mes - 1, 1))}
-          className="rounded-lg px-2 py-1 text-sm font-bold hover:bg-gray-200"
+          className="rounded-lg px-2 py-1 text-sm font-bold hover:bg-gray-200 disabled:opacity-30"
         >
           ←
         </button>
@@ -232,14 +323,18 @@ export default function WidgetReserva({ imovel }: { imovel: ImovelReservavel }) 
       <div className="mb-3 grid grid-cols-7 gap-1">
         {dias.map((item, index) => {
           if (!item) return <div key={`vazio-${index}`} />;
+          const passado = isPassado(item.dataStr);
           const ocupado = isOcupado(item.dataStr);
+          const desabilitado = passado || ocupado;
           const selecionado =
             item.dataStr === checkIn ||
             item.dataStr === checkOut ||
             (!!checkIn && !!checkOut && item.dataStr > checkIn && item.dataStr < checkOut);
 
           let estilo = 'border-emerald-200 bg-emerald-50 text-emerald-900 hover:bg-emerald-100';
-          if (ocupado) {
+          if (passado) {
+            estilo = 'cursor-not-allowed border-gray-100 bg-gray-50 text-gray-300';
+          } else if (ocupado) {
             estilo = 'cursor-not-allowed border-red-200 bg-red-50 text-red-500 line-through';
           } else if (selecionado) {
             estilo = 'border-[#155E75] bg-[#155E75] font-bold text-white';
@@ -249,9 +344,9 @@ export default function WidgetReserva({ imovel }: { imovel: ImovelReservavel }) 
             <button
               key={item.dataStr}
               type="button"
-              aria-label={`${item.dia}${ocupado ? ', ocupado' : ', livre'}`}
+              aria-label={`${item.dia}${ocupado ? ', ocupado' : passado ? ', indisponível' : ', livre'}`}
               aria-pressed={selecionado}
-              disabled={ocupado || disponibilidadeCarregando || !!erroDisponibilidade || reservando}
+              disabled={desabilitado || disponibilidadeCarregando || !!erroDisponibilidade || reservando}
               onClick={() => handleDia(item.dataStr)}
               className={`rounded-lg border py-1.5 text-xs transition disabled:opacity-80 ${estilo}`}
             >
@@ -273,15 +368,32 @@ export default function WidgetReserva({ imovel }: { imovel: ImovelReservavel }) 
         </div>
       )}
 
-      <div className="mb-4 grid grid-cols-2 overflow-hidden rounded-xl border border-gray-300 text-xs">
+      <div className="mb-3 grid grid-cols-2 overflow-hidden rounded-xl border border-gray-300 text-xs">
         <div className="border-r border-gray-300 p-2.5">
           <span className="block text-[10px] font-bold uppercase text-gray-500">Check-in</span>
-          <span className="font-medium text-gray-900">{checkIn || 'Selecione uma data'}</span>
+          <span className="font-medium text-gray-900">{checkIn || 'Selecione'}</span>
         </div>
         <div className="p-2.5">
           <span className="block text-[10px] font-bold uppercase text-gray-500">Check-out</span>
-          <span className="font-medium text-gray-900">{checkOut || 'Selecione uma data'}</span>
+          <span className="font-medium text-gray-900">{checkOut || 'Selecione'}</span>
         </div>
+      </div>
+
+      <div className="mb-4 rounded-xl border border-gray-300 p-2.5 text-xs">
+        <label className="flex items-center justify-between">
+          <span className="text-[10px] font-bold uppercase text-gray-500">Hóspedes (máx. {maxHospedes})</span>
+          <select
+            value={hospedes}
+            onChange={(e) => setHospedes(Number(e.target.value))}
+            className="rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs font-semibold text-gray-900 outline-none"
+          >
+            {Array.from({ length: maxHospedes }, (_, i) => i + 1).map((qtd) => (
+              <option key={qtd} value={qtd}>
+                {qtd} {qtd === 1 ? 'hóspede' : 'hóspedes'}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
       {mensagem && <p className="mb-3 text-sm text-red-700" role="alert">{mensagem}</p>}
@@ -292,7 +404,7 @@ export default function WidgetReserva({ imovel }: { imovel: ImovelReservavel }) 
         onClick={() => void confirmarReserva()}
         className="w-full rounded-xl bg-[#E87722] py-3.5 text-sm font-bold text-white shadow-sm transition hover:bg-[#d16617] disabled:cursor-not-allowed disabled:bg-gray-300"
       >
-        {reservando ? 'Confirmando...' : noites > 0 ? 'Reservar agora' : 'Selecione as datas'}
+        {reservando ? 'Enviando solicitação...' : noites > 0 ? 'Solicitar reserva' : 'Selecione as datas'}
       </button>
 
       {noites > 0 && (
@@ -309,7 +421,7 @@ export default function WidgetReserva({ imovel }: { imovel: ImovelReservavel }) 
             <span>Total da estadia</span>
             <span>{formatarMoeda(total)}</span>
           </div>
-          <p className="text-right text-xs text-gray-500">Total já inclui a taxa de limpeza.</p>
+          <p className="text-right text-xs text-gray-500">100% repassado ao anfitrião, sem taxas ocultas.</p>
         </div>
       )}
     </div>

@@ -1,5 +1,5 @@
 'use client';
-
+import { LISTA_COMODIDADES } from '@/lib/comodidades';
 import { useMemo, useState, type FormEvent } from 'react';
 import { supabase } from '@/lib/supabase';
 import { PLATFORM_COMMISSION_RATE } from '@/lib/billing';
@@ -115,6 +115,51 @@ export default function ModalEditarImovel({
   const [sincronizandoIcal, setSincronizandoIcal] = useState(false);
   const [statusIcal, setStatusIcal] = useState('');
   const [erro, setErro] = useState('');
+    const [precificacao, setPrecificacao] = useState<{
+    analyzedCount: number;
+    standardPrice: number | null;
+    weekendPrice: number | null;
+    highSeasonPrice: number | null;
+  } | null>(null);
+  const [buscandoPreco, setBuscandoPreco] = useState(false);
+
+  const consultarPrecoRegiao = async () => {
+    setBuscandoPreco(true);
+    setPrecificacao(null);
+    try {
+      // 1. Garante que temos latitude e longitude usando o endereço do form
+      const endereco = [form.street, form.neighborhood, form.city, form.state, form.cep, 'Brasil']
+        .filter(Boolean)
+        .join(', ');
+      const respMapa = await fetch(`/api/mapa?q=${encodeURIComponent(endereco)}`);
+      const dadosMapa = await respMapa.json();
+
+      if (!respMapa.ok || !dadosMapa.lat || !dadosMapa.lon) {
+        throw new Error('Preencha o endereço na aba Localização antes de analisar.');
+      }
+
+      // 2. Consulta a API de 500m que já corrigimos
+      const params = new URLSearchParams({
+        propertyId: imovel.id,
+        latitude: String(dadosMapa.lat),
+        longitude: String(dadosMapa.lon),
+        bedrooms: String(Number(form.bedrooms) || 0),
+        guests: String(Number(form.guests) || 1),
+      });
+
+      const resp = await fetch(`/api/precificacao?${params.toString()}`);
+      const dados = await resp.json();
+      if (resp.ok) {
+        setPrecificacao(dados);
+      } else {
+        setErro(dados.error || 'Erro ao analisar preços.');
+      }
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : 'Erro ao consultar região.');
+    } finally {
+      setBuscandoPreco(false);
+    }
+  };
 
   const valores = useMemo(() => {
     const diaria = Number(form.price_per_night);
@@ -135,7 +180,7 @@ export default function ModalEditarImovel({
     setForm((atual) => ({ ...atual, [campo]: valor }));
   };
 
-  const executarAssistente = async (acao: AcaoAssistente) => {
+    const executarAssistente = async (acao: AcaoAssistente) => {
     if (!form.title.trim() || !form.city.trim()) {
       setErro('Preencha o título e a cidade antes de usar o assistente.');
       setAbaAtiva(!form.title.trim() ? 'basicas' : 'localizacao');
@@ -144,54 +189,59 @@ export default function ModalEditarImovel({
 
     setErro('');
     setAcaoIA(acao);
-    try {
-      const { data: { session }, error: erroSessao } = await supabase.auth.getSession();
-      if (erroSessao) throw erroSessao;
-      if (!session) throw new Error('Sua sessão expirou. Entre novamente para usar o assistente.');
 
-      const resposta = await fetch('/api/assistente-imovel', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: 'Bearer '.concat(session.access_token),
-        },
-        body: JSON.stringify({
-          acao,
-          titulo: form.title,
-          cidade: form.city,
-          estado: form.state,
-          bairro: form.neighborhood,
-          comodidades: form.amenities,
-          descricao: form.description,
-        }),
-      });
-      const dados: unknown = await resposta.json();
-      if (!resposta.ok) {
-        const mensagem =
-          typeof dados === 'object' && dados !== null && 'error' in dados && typeof dados.error === 'string'
-            ? dados.error
-            : 'Não foi possível concluir a sugestão de IA.';
-        throw new Error(mensagem);
+    try {
+      if (acao === 'descricao') {
+        const local = [form.neighborhood.trim(), form.city.trim(), form.state.trim()]
+          .filter(Boolean)
+          .join(', ');
+        const detalhes = [
+          Number(form.bedrooms) > 0 ? `${form.bedrooms} quarto(s)` : '',
+          Number(form.guests) > 0 ? `acomoda até ${form.guests} hóspede(s)` : '',
+          Number(form.bathrooms) > 0 ? `${form.bathrooms} banheiro(s)` : '',
+        ].filter(Boolean).join(', ');
+
+        const textoGerado = [
+          `Aproveite sua estadia em ${form.title.trim()}${local ? `, localizado em ${local}` : ''}.`,
+          detalhes ? `O espaço conta com ${detalhes}, oferecendo conforto e praticidade para sua viagem.` : '',
+          form.amenities.trim() ? `Diferenciais e comodidades: ${form.amenities.trim()}.` : '',
+          'Consulte as datas disponíveis e faça sua reserva com segurança pelo GoFérias.',
+        ].filter(Boolean).join('\n\n');
+
+        atualizarCampo('description', textoGerado);
+        return;
       }
 
-      if (acao === 'descricao') {
-        const descricao =
-          typeof dados === 'object' && dados !== null && 'descricao' in dados && typeof dados.descricao === 'string'
-            ? dados.descricao.trim()
-            : '';
-        if (!descricao) throw new Error('A IA não retornou uma descrição válida. Tente novamente.');
-        atualizarCampo('description', descricao);
+      const enderecoBusca = [form.neighborhood, form.city, form.state, 'Brasil']
+        .filter((parte) => Boolean(parte && parte.trim()))
+        .join(', ');
+
+      const respMapa = await fetch(`/api/mapa?q=${encodeURIComponent(enderecoBusca)}`);
+      const dadosMapa = await respMapa.json();
+
+      if (!respMapa.ok || !dadosMapa.lat || !dadosMapa.lon) {
+        throw new Error(`Não foi possível achar coordenadas para: ${enderecoBusca}`);
+      }
+
+      const params = new URLSearchParams({
+        latitude: String(dadosMapa.lat),
+        longitude: String(dadosMapa.lon),
+      });
+
+      const resposta = await fetch(`/api/proximidades?${params.toString()}`);
+      const dados = await resposta.json();
+
+      if (dados && Array.isArray(dados.locais) && dados.locais.length > 0) {
+        const textos = dados.locais.map(
+          (l: { nome: string; categoria: string; distancia: string }) =>
+            `${l.nome} (${l.categoria} — ${l.distancia})`
+        );
+        setSugestoes(textos);
       } else {
-        const lista =
-          typeof dados === 'object' && dados !== null && 'sugestoes' in dados && Array.isArray(dados.sugestoes)
-            ? dados.sugestoes.filter((item): item is string => typeof item === 'string' && !!item.trim())
-            : [];
-        if (!lista.length) throw new Error('A IA não retornou sugestões. Tente novamente.');
-        setSugestoes(lista);
+        setErro(`Mapa localizado (${dadosMapa.lat}, ${dadosMapa.lon}), mas sem comércios cadastrados nesse ponto.`);
       }
     } catch (error) {
-      console.error('Erro ao usar assistente de anúncio:', error);
-      setErro(error instanceof Error ? error.message : 'Erro de conexão ao usar o assistente.');
+      setErro(error instanceof Error ? error.message : 'Não foi possível buscar locais próximos.');
     } finally {
       setAcaoIA(null);
     }
@@ -342,9 +392,8 @@ export default function ModalEditarImovel({
       setErro(error instanceof Error ? error.message : 'Não foi possível salvar o imóvel.');
     } finally {
       setSalvando(false);
-    }
-  };
-
+    };
+};
   const abas: { id: AbaFormulario; titulo: string; passo: string }[] = [
     { id: 'basicas', titulo: 'Informações básicas', passo: '01' },
     { id: 'localizacao', titulo: 'Localização', passo: '02' },
@@ -355,7 +404,7 @@ export default function ModalEditarImovel({
   const indiceAbaAtiva = abas.findIndex((aba) => aba.id === abaAtiva);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-3 backdrop-blur-sm sm:p-6">
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/60 p-3 backdrop-blur-sm sm:p-6">
       <div
         role="dialog"
         aria-modal="true"
@@ -447,22 +496,53 @@ export default function ModalEditarImovel({
                     ))}
                   </div>
 
-                  <label className="block">
-                    <span className="mb-1.5 block text-sm font-semibold text-slate-700">Comodidades e diferenciais</span>
-                    <input
-                      type="text"
-                      value={form.amenities}
-                      onChange={(evento) => atualizarCampo('amenities', evento.target.value)}
-                      placeholder="Ex.: piscina, Wi-Fi, varanda, ar-condicionado"
-                      className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none transition focus:border-[#155E75] focus:ring-4 focus:ring-[#155E75]/10"
-                    />
-                    <span className="mt-1 block text-xs text-slate-500">Será incluído na descrição do anúncio.</span>
-                  </label>
+                  <div>
+                    <span className="mb-2 block text-sm font-semibold text-slate-700">
+                      O que esse lugar oferece
+                    </span>
+                    <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                      {LISTA_COMODIDADES.map((item) => {
+                        const listaAtual = form.amenities
+                          .split(/[,;\n]+/)
+                          .map((s) => s.trim())
+                          .filter(Boolean);
+                        const marcado = listaAtual.some(
+                          (c) => c.toLowerCase() === item.nome.toLowerCase()
+                        );
+
+                        const alternarItem = () => {
+                          const novaLista = marcado
+                            ? listaAtual.filter((c) => c.toLowerCase() !== item.nome.toLowerCase())
+                            : [...listaAtual, item.nome];
+                          atualizarCampo('amenities', novaLista.join(', '));
+                        };
+
+                        return (
+                          <label
+                            key={item.id}
+                            className={`flex cursor-pointer items-center gap-3 rounded-xl border p-3 text-sm transition ${
+                              marcado
+                                ? 'border-[#155E75] bg-cyan-50/60 font-medium text-slate-900'
+                                : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={marcado}
+                              onChange={alternarItem}
+                              className="h-4 w-4 rounded border-slate-300 text-[#155E75] focus:ring-[#155E75]"
+                            />
+                            <span>{item.nome}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
 
                   <div className="flex flex-col gap-3 rounded-2xl border border-violet-100 bg-violet-50/70 p-4 sm:flex-row sm:items-center">
                     <div className="flex-1">
-                      <p className="text-sm font-bold text-slate-900">Deixe a IA ajudar no texto</p>
-                      <p className="mt-0.5 text-xs leading-relaxed text-slate-600">A sugestão usa os dados já preenchidos e pode ser editada antes de salvar.</p>
+                      <p className="text-sm font-bold text-slate-900">Sugestão gratuita de descrição</p>
+                      <p className="mt-0.5 text-xs leading-relaxed text-slate-600">A descrição é gerada com os dados do imóvel, sem depender de um serviço externo, e pode ser editada antes de salvar.</p>
                     </div>
                     <button
                       type="button"
@@ -470,7 +550,7 @@ export default function ModalEditarImovel({
                       onClick={() => void executarAssistente('descricao')}
                       className="shrink-0 rounded-xl bg-violet-700 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-violet-800 disabled:cursor-wait disabled:opacity-60"
                     >
-                      {acaoIA === 'descricao' ? 'Gerando...' : '✦ Gerar descrição atrativa com IA'}
+                      {acaoIA === 'descricao' ? 'Gerando...' : '✦ Gerar descrição atrativa'}
                     </button>
                   </div>
 
@@ -503,7 +583,7 @@ export default function ModalEditarImovel({
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                       <h4 className="text-sm font-bold text-slate-900">Enriqueça o anúncio</h4>
-                      <p className="mt-1 text-xs text-slate-600">A IA sugere tipos de comércios e atrações para você conferir na região.</p>
+                      <p className="mt-1 text-xs text-slate-600">Busque comércios e atrações reais próximos ao imóvel no OpenStreetMap.</p>
                     </div>
                     <button
                       type="button"
@@ -511,7 +591,7 @@ export default function ModalEditarImovel({
                       onClick={() => void executarAssistente('proximidades')}
                       className="shrink-0 rounded-xl border border-cyan-800 bg-white px-4 py-2.5 text-xs font-bold text-cyan-900 transition hover:bg-cyan-100 disabled:cursor-wait disabled:opacity-60"
                     >
-                      {acaoIA === 'proximidades' ? 'Buscando ideias...' : 'Sugerir locais próximos'}
+                      {acaoIA === 'proximidades' ? 'Buscando locais...' : 'Buscar locais próximos'}
                     </button>
                   </div>
                   {sugestoes.length > 0 && (
@@ -519,7 +599,7 @@ export default function ModalEditarImovel({
                       <ul className="space-y-2 text-sm text-slate-700">
                         {sugestoes.map((sugestao, indice) => <li key={`${indice}-${sugestao}`}>• {sugestao}</li>)}
                       </ul>
-                      <p className="mt-3 text-xs text-slate-500">Confira nomes e distâncias antes de publicar; sugestões de IA podem conter imprecisões.</p>
+                      <p className="mt-3 text-xs text-slate-500">Confira nomes e distâncias antes de publicar; os dados são colaborativos e podem estar desatualizados.</p>
                       <button
                         type="button"
                         onClick={adicionarSugestoesNaDescricao}
@@ -588,16 +668,89 @@ export default function ModalEditarImovel({
                   </label>
                 </div>
 
+                {/* Novo Card: Precificação Inteligente (Raio 500m) */}
+                <div className="mt-6 rounded-2xl border border-cyan-100 bg-cyan-50/70 p-5">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h4 className="font-bold text-slate-900">Precificação Inteligente (Raio 500m)</h4>
+                      <p className="mt-0.5 text-xs text-slate-600">
+                        Compare a média de imóveis semelhantes próximos ao seu endereço.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={buscandoPreco}
+                      onClick={() => void consultarPrecoRegiao()}
+                      className="rounded-xl bg-[#155E75] px-4 py-2 text-xs font-bold text-white transition hover:bg-[#104b5e] disabled:opacity-60"
+                    >
+                      {buscandoPreco ? 'Analisando...' : 'Analisar concorrência'}
+                    </button>
+                  </div>
+
+                  {precificacao && (
+                    <div className="mt-4 border-t border-cyan-200/60 pt-4">
+                      {precificacao.analyzedCount === 0 ? (
+                        <p className="text-xs font-medium text-slate-600">
+                          Nenhum imóvel ativo encontrado em um raio de 500m para comparação.
+                        </p>
+                      ) : (
+                        <>
+                          <p className="mb-3 text-xs font-semibold text-cyan-900">
+                            Baseado em {precificacao.analyzedCount} imóvel(is) ativo(s) próximo(s):
+                          </p>
+                          <div className="grid gap-3 sm:grid-cols-3">
+                            {[
+                              { rotulo: 'Diária padrão', preco: precificacao.standardPrice, desc: 'Média local' },
+                              { rotulo: 'Fim de semana', preco: precificacao.weekendPrice, desc: '+25% sugerido' },
+                              { rotulo: 'Alta temporada', preco: precificacao.highSeasonPrice, desc: '+40% sugerido' },
+                            ].map((item) => (
+                              <div key={item.rotulo} className="rounded-xl border border-white bg-white p-3 shadow-sm">
+                                <span className="text-xs font-medium text-slate-500">{item.rotulo}</span>
+                                <strong className="mt-1 block text-base text-slate-900">
+                                  {item.preco ? formatarMoeda(Math.round(item.preco * 100)) : '—'}
+                                </strong>
+                                <span className="block text-[11px] text-slate-400">{item.desc}</span>
+                                <button
+                                  type="button"
+                                  disabled={!item.preco}
+                                  onClick={() => item.preco && atualizarCampo('price_per_night', item.preco.toFixed(2))}
+                                  className="mt-2.5 w-full rounded-lg bg-slate-100 py-1.5 text-xs font-bold text-[#155E75] transition hover:bg-cyan-100 disabled:opacity-40"
+                                >
+                                  Aplicar valor
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Card Atualizado: Prévia com 0% de Comissão (Repasse Integral) */}
                 <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-5">
                   <h4 className="font-bold text-slate-900">Prévia de 1 diária</h4>
                   <div className="mt-4 space-y-3 text-sm">
-                    <div className="flex justify-between gap-4 text-slate-600"><span>Diária</span><span>{formatarMoeda(valores.diariaCentavos)}</span></div>
-                    <div className="flex justify-between gap-4 text-slate-600"><span>Taxa de limpeza (100% para você)</span><span>{formatarMoeda(valores.limpezaCentavos)}</span></div>
-                    <div className="flex justify-between gap-4 border-t border-slate-200 pt-3 font-semibold text-slate-900"><span>Total para o hóspede</span><span>{formatarMoeda(valores.totalHospedeCentavos)}</span></div>
-                    <div className="flex justify-between gap-4 text-rose-700"><span>Comissão GoFérias (10% somente da diária)</span><span>− {formatarMoeda(valores.comissaoCentavos)}</span></div>
-                    <div className="flex justify-between gap-4 rounded-xl bg-emerald-50 px-3 py-3 font-bold text-emerald-800"><span>Você recebe</span><span>{formatarMoeda(valores.liquidoAnfitriaoCentavos)}</span></div>
+                    <div className="flex justify-between gap-4 text-slate-600">
+                      <span>Diária</span>
+                      <span>{formatarMoeda(valores.diariaCentavos)}</span>
+                    </div>
+                    <div className="flex justify-between gap-4 text-slate-600">
+                      <span>Taxa de limpeza</span>
+                      <span>{formatarMoeda(valores.limpezaCentavos)}</span>
+                    </div>
+                    <div className="flex justify-between gap-4 border-t border-slate-200 pt-3 font-semibold text-slate-900">
+                      <span>Total pago pelo hóspede</span>
+                      <span>{formatarMoeda(valores.totalHospedeCentavos)}</span>
+                    </div>
+                    <div className="flex justify-between gap-4 rounded-xl bg-emerald-50 px-3 py-3 font-bold text-emerald-800">
+                      <span>Você recebe (100% integral)</span>
+                      <span>{formatarMoeda(valores.totalHospedeCentavos)}</span>
+                    </div>
                   </div>
-                  <p className="mt-3 text-xs leading-relaxed text-slate-500">A comissão de 10% incide apenas sobre a diária; a taxa de limpeza é repassada integralmente ao anfitrião.</p>
+                  <p className="mt-3 text-xs leading-relaxed text-slate-500">
+                    O GoFérias não cobra comissão por reserva. O valor da diária e da taxa de limpeza são repassados integralmente a você.
+                  </p>
                 </div>
               </section>
             )}
@@ -689,4 +842,4 @@ export default function ModalEditarImovel({
       </div>
     </div>
   );
-}
+ }

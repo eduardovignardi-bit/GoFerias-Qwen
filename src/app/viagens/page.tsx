@@ -1,4 +1,5 @@
 'use client';
+
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -9,8 +10,47 @@ export default function MinhasViagens() {
   const router = useRouter();
   const [viagens, setViagens] = useState<any[]>([]);
   const [carregando, setCarregando] = useState(true);
+  const [pagandoId, setPagandoId] = useState<string | null>(null);
+  const [erroPagamento, setErroPagamento] = useState('');
+  const [solicitada, setSolicitada] = useState(false);
+  const [whatsappUrl, setWhatsappUrl] = useState<string | null>(null);
+  const [cpfSalvo, setCpfSalvo] = useState('');
+  const [reservaParaPagar, setReservaParaPagar] = useState<any | null>(null);
+  const [cpfInput, setCpfInput] = useState('');
+  const [erroCpf, setErroCpf] = useState('');
+
+  const formatarCpf = (valor: string) => {
+    const digitos = valor.replace(/\D/g, '').slice(0, 11);
+    return digitos
+      .replace(/(\d{3})(\d)/, '$1.$2')
+      .replace(/(\d{3})(\d)/, '$1.$2')
+      .replace(/(\d{3})(\d{1,2})$/, '$1-$2');
+  };
+
+  const validarCpf = (cpf: string) => {
+    const num = cpf.replace(/\D/g, '');
+    if (num.length !== 11 || /^(\d)\1+$/.test(num)) return false;
+    let soma = 0;
+    for (let i = 0; i < 9; i++) soma += Number(num[i]) * (10 - i);
+    let resto = (soma * 10) % 11;
+    if (resto === 10 || resto === 11) resto = 0;
+    if (resto !== Number(num[9])) return false;
+    soma = 0;
+    for (let i = 0; i < 10; i++) soma += Number(num[i]) * (11 - i);
+    resto = (soma * 10) % 11;
+    if (resto === 10 || resto === 11) resto = 0;
+    return resto === Number(num[10]);
+  };
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('solicitada') === '1') {
+      setSolicitada(true);
+    }
+    const wa = params.get('wa');
+    if (wa) {
+      setWhatsappUrl(wa);
+    }
     carregarViagens();
   }, []);
 
@@ -18,6 +58,16 @@ export default function MinhasViagens() {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return router.push('/');
+
+      const { data: perfil } = await supabase
+        .from('profiles')
+        .select('cpf')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      if (perfil?.cpf) {
+        setCpfSalvo(perfil.cpf);
+      }
 
       const { data, error } = await supabase
         .from('bookings')
@@ -47,6 +97,61 @@ export default function MinhasViagens() {
     }
   };
 
+  const iniciarPagamento = async (reserva: any, cpfConfirmado?: string) => {
+    const cpfFinal = (cpfConfirmado || cpfSalvo).replace(/\D/g, '');
+    if (!validarCpf(cpfFinal)) {
+      setCpfInput(cpfSalvo ? formatarCpf(cpfSalvo) : '');
+      setErroCpf('');
+      setReservaParaPagar(reserva);
+      return;
+    }
+
+    setPagandoId(reserva.id);
+    setErroPagamento('');
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        await supabase.from('profiles').update({ cpf: cpfFinal }).eq('id', user.id);
+        setCpfSalvo(cpfFinal);
+      }
+
+      const resp = await fetch('/api/checkout/reserva', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bookingId: reserva.id,
+          propertyId: reserva.property_id,
+          total: Number(reserva.total_price),
+          cpf: cpfFinal,
+        }),
+      });
+
+      const dados = await resp.json();
+      if (!resp.ok || !dados?.init_point) {
+        throw new Error(dados?.error || 'Não foi possível gerar o link de pagamento.');
+      }
+
+      window.location.href = dados.init_point;
+    } catch (err) {
+      setErroPagamento(err instanceof Error ? err.message : 'Erro ao abrir pagamento.');
+      setPagandoId(null);
+    }
+  };
+
+  const obterStatusVisual = (status?: string | null) => {
+    const s = (status || '').toLowerCase();
+    if (s === 'confirmed' || s === 'paid') {
+      return { rotulo: 'Confirmada e paga', cor: 'bg-emerald-600 text-white' };
+    }
+    if (s === 'approved') {
+      return { rotulo: 'Aprovada · Aguardando pagamento', cor: 'bg-[#155E75] text-white' };
+    }
+    if (s === 'cancelled' || s === 'canceled' || s === 'rejected') {
+      return { rotulo: 'Recusada / Cancelada', cor: 'bg-rose-600 text-white' };
+    }
+    return { rotulo: 'Aguardando aprovação do anfitrião', cor: 'bg-amber-500 text-white' };
+  };
+
   return (
     <div className="min-h-screen bg-white text-[#222222] font-sans">
       <header className="border-b border-gray-200 sticky top-0 bg-white z-40">
@@ -66,8 +171,32 @@ export default function MinhasViagens() {
       </header>
 
       <main className="max-w-5xl mx-auto px-6 py-10">
+        {solicitada && (
+          <div className="mb-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-sm text-emerald-950">
+            <p className="font-bold">Solicitação de reserva enviada ao anfitrião!</p>
+            <p className="mt-1 text-xs text-emerald-800">
+              Assim que o proprietário confirmar a disponibilidade no painel dele, o botão de pagamento será liberado abaixo.
+            </p>
+            {whatsappUrl && (
+              <a
+                href={whatsappUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-3 inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-emerald-700"
+              >
+                Avisar anfitrião agora pelo WhatsApp
+              </a>
+            )}
+          </div>
+        )}
+
+        {erroPagamento && (
+          <div className="mb-6 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+            {erroPagamento}
+          </div>
+        )}
         <h1 className="text-3xl font-bold tracking-tight text-[#155E75] mb-2">Viagens</h1>
-        <p className="text-sm text-gray-500 mb-8">Acompanhe suas reservas confirmadas e endereços de hospedagem.</p>
+        <p className="text-sm text-gray-500 mb-8">Acompanhe suas solicitações, liberações de pagamento e reservas confirmadas.</p>
 
         {carregando ? (
           <p className="text-sm text-gray-500">Carregando suas reservas...</p>
@@ -92,6 +221,10 @@ export default function MinhasViagens() {
 
               const fotoCapa =
                 (Array.isArray(imovel.images) && imovel.images[0]) || imovel.image_url;
+              const statusInfo = obterStatusVisual(reserva.status);
+              const s = (reserva.status || '').toLowerCase();
+              const podePagar = s === 'approved';
+              const jaPago = s === 'confirmed' || s === 'paid';
 
               return (
                 <div
@@ -107,8 +240,8 @@ export default function MinhasViagens() {
                           Sem foto
                         </div>
                       )}
-                      <span className="absolute top-3 left-3 bg-emerald-600 text-white text-[11px] font-bold px-3 py-1 rounded-full shadow-xs">
-                        Confirmada
+                      <span className={`absolute top-3 left-3 text-[11px] font-bold px-3 py-1 rounded-full shadow-xs ${statusInfo.cor}`}>
+                        {statusInfo.rotulo}
                       </span>
                     </div>
 
@@ -127,10 +260,25 @@ export default function MinhasViagens() {
                         </div>
                       </div>
 
-                      {imovel.street && (
+                      {jaPago && imovel.street && (
                         <p className="text-xs text-gray-600">
-                          <strong>Endereço:</strong> {imovel.street}, {imovel.street_number || 'S/N'} - {imovel.neighborhood}
+                          <strong>Endereço completo:</strong> {imovel.street}, {imovel.street_number || 'S/N'} - {imovel.neighborhood}
                         </p>
+                      )}
+
+                      {podePagar && (
+                        <div className="mt-4">
+                          <button
+                            type="button"
+                            disabled={pagandoId === reserva.id}
+                            onClick={() => void iniciarPagamento(reserva)}
+                            className="w-full rounded-xl bg-emerald-600 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-700 disabled:opacity-60"
+                          >
+                            {pagandoId === reserva.id
+                              ? 'Abrindo Mercado Pago...'
+                              : `Pagar agora · R$ ${Number(reserva.total_price).toFixed(2)}`}
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -150,6 +298,63 @@ export default function MinhasViagens() {
                 </div>
               );
             })}
+          </div>
+        )}
+
+        {reservaParaPagar && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-xs">
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!validarCpf(cpfInput)) {
+                  setErroCpf('Informe um CPF válido com 11 dígitos.');
+                  return;
+                }
+                const reservaAlvo = reservaParaPagar;
+                setReservaParaPagar(null);
+                void iniciarPagamento(reservaAlvo, cpfInput);
+              }}
+              className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl"
+            >
+              <h3 className="text-lg font-bold text-slate-900">Informe seu CPF para continuar</h3>
+              <p className="mt-1 text-xs text-slate-600">
+                Necessário para emissão do comprovante fiscal e identificação junto ao Mercado Pago.
+              </p>
+
+              <label className="mt-4 block">
+                <span className="mb-1 block text-xs font-semibold text-slate-700">CPF do titular</span>
+                <input
+                  type="text"
+                  required
+                  inputMode="numeric"
+                  placeholder="000.000.000-00"
+                  value={cpfInput}
+                  onChange={(e) => {
+                    setErroCpf('');
+                    setCpfInput(formatarCpf(e.target.value));
+                  }}
+                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm outline-none focus:border-[#155E75]"
+                />
+              </label>
+
+              {erroCpf && <p className="mt-2 text-xs font-semibold text-rose-600">{erroCpf}</p>}
+
+              <div className="mt-6 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setReservaParaPagar(null)}
+                  className="rounded-xl border border-slate-300 px-4 py-2 text-xs font-bold text-slate-700"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-xl bg-emerald-600 px-5 py-2 text-xs font-bold text-white hover:bg-emerald-700"
+                >
+                  Ir para o pagamento
+                </button>
+              </div>
+            </form>
           </div>
         )}
       </main>
